@@ -173,7 +173,31 @@ SMPLX_DEMO_JOINTS = [
     "R_Wrist",
 ]
 
-# Joint mappings - organized by (data_format, robot_type)
+# C3D / Plug-In Gait (PIG) marker set joint names
+# Order matches the joint_map in data_utils/prep_c3d_for_rt.py
+C3D_DEMO_JOINTS = [
+    "Pelvis",
+    "L_Hip",
+    "R_Hip",
+    "L_Knee",
+    "R_Knee",
+    "L_Ankle",
+    "R_Ankle",
+    "L_Toe",
+    "R_Toe",
+    "Spine",
+    "Chest",
+    "Neck",
+    "Head",
+    "L_Shoulder",
+    "R_Shoulder",
+    "L_Elbow",
+    "R_Elbow",
+    "L_Wrist",
+    "R_Wrist",
+]
+
+
 JOINTS_MAPPINGS = {
     ("lafan", "g1"): {
         "Spine1": "pelvis_contour_link",
@@ -294,6 +318,40 @@ JOINTS_MAPPINGS = {
         "LeftFoot": "Ankle_Cross_Left",
         "RightFoot": "Ankle_Cross_Right",
     },
+    ("c3d", "g1"): {
+        "Pelvis":     "pelvis_contour_link",
+        "L_Hip":      "left_hip_pitch_link",
+        "R_Hip":      "right_hip_pitch_link",
+        "L_Knee":     "left_knee_link",
+        "R_Knee":     "right_knee_link",
+        "L_Ankle":    "left_ankle_intermediate_1_link",
+        "R_Ankle":    "right_ankle_intermediate_1_link",
+        "L_Toe":      "left_ankle_roll_sphere_5_link",
+        "R_Toe":      "right_ankle_roll_sphere_5_link",
+        "L_Shoulder": "left_shoulder_roll_link",
+        "R_Shoulder": "right_shoulder_roll_link",
+        "L_Elbow":    "left_elbow_link",
+        "R_Elbow":    "right_elbow_link",
+        "L_Wrist":    "left_rubber_hand_link",
+        "R_Wrist":    "right_rubber_hand_link",
+    },
+    ("c3d", "t1"): {
+        "Pelvis":     "Trunk",
+        "L_Hip":      "Hip_Pitch_Left",
+        "R_Hip":      "Hip_Pitch_Right",
+        "L_Knee":     "Shank_Left",
+        "R_Knee":     "Shank_Right",
+        "L_Ankle":    "Ankle_Cross_Left",
+        "R_Ankle":    "Ankle_Cross_Right",
+        "L_Toe":      "left_foot_sphere_5_link",
+        "R_Toe":      "right_foot_sphere_5_link",
+        "L_Shoulder": "AL1",
+        "R_Shoulder": "AR1",
+        "L_Elbow":    "left_hand_link",
+        "R_Elbow":    "right_hand_link",
+        "L_Wrist":    "left_hand_sphere_link",
+        "R_Wrist":    "right_hand_sphere_link",
+    },
 }
 
 # Data format specific constants
@@ -302,6 +360,7 @@ TOE_NAMES_BY_FORMAT = {
     "smplh": ["L_Toe", "R_Toe"],
     "mocap": ["LeftToeBase", "RightToeBase"],
     "smplx": ["L_Foot", "R_Foot"],
+    "c3d":   ["L_Toe", "R_Toe"],
 }
 
 
@@ -328,6 +387,7 @@ DEMO_JOINTS_REGISTRY: dict[str, list[str]] = {
     "smplh": SMPLH_DEMO_JOINTS,
     "mocap": MOCAP_DEMO_JOINTS,
     "smplx": SMPLX_DEMO_JOINTS,
+    "c3d":   C3D_DEMO_JOINTS,
 }
 
 # Type alias for data formats - use str to allow dynamic data formats via DEMO_JOINTS_REGISTRY

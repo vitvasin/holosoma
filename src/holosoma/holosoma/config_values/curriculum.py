@@ -1,3 +1,4 @@
+from holosoma.config_values.wbt.g1_23dof.curriculum import g1_23dof_wbt_curriculum
 """Default curriculum manager configurations."""
 
 from holosoma.config_values.loco.g1.curriculum import g1_29dof_curriculum, g1_29dof_curriculum_fast_sac
@@ -13,4 +14,5 @@ DEFAULTS = {
     "t1_29dof_fast_sac": t1_29dof_curriculum_fast_sac,
     "g1_29dof_fast_sac": g1_29dof_curriculum_fast_sac,
     "g1_29dof_wbt_curriculum": g1_29dof_wbt_curriculum,
+    "g1_23dof_wbt_curriculum": g1_23dof_wbt_curriculum,
 }

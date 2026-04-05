@@ -1,3 +1,4 @@
+from holosoma.config_values.wbt.g1_23dof.termination import g1_23dof_wbt_termination
 """Default termination manager configurations."""
 
 from holosoma.config_values.loco.g1.termination import g1_29dof_termination
@@ -11,4 +12,5 @@ DEFAULTS = {
     "t1_29dof": t1_29dof_termination,
     "g1_29dof": g1_29dof_termination,
     "g1_29dof_wbt": g1_29dof_wbt_termination,
+    "g1_23dof_wbt": g1_23dof_wbt_termination,
 }

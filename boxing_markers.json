@@ -1,0 +1,21 @@
+{
+    "Pelvis":      ["LASI", "RASI", "LPSI", "RPSI", "LIC", "RIC", "LSI", "RSI", "LFWT", "RFWT", "LBWT", "RBWT"],
+    "L_Hip":       ["LASI", "LPSI", "LIC", "LSI", "LFWT", "LBWT"],
+    "R_Hip":       ["RASI", "RPSI", "RIC", "RSI", "RFWT", "RBWT"],
+    "L_Knee":      ["LKNE"],
+    "R_Knee":      ["RKNE"],
+    "L_Ankle":     ["LANK"],
+    "R_Ankle":     ["RANK"],
+    "L_Toe":       ["LTOE", "LTOEBASE"],
+    "R_Toe":       ["RTOE", "RTOEBASE"],
+    "Spine":       ["STRN", "C7", "T10"],
+    "Chest":       ["LSHO", "RSHO"],
+    "Neck":        ["C7"],
+    "Head":        ["RFHD", "LFHD", "RBHD", "LBHD"],
+    "L_Shoulder":  ["LSHO"],
+    "R_Shoulder":  ["RSHO"],
+    "L_Elbow":     ["LELB"],
+    "R_Elbow":     ["RELB"],
+    "L_Wrist":     ["LWRA", "LWRB"],
+    "R_Wrist":     ["RWRA", "RWRB"]
+}

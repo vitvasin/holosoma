@@ -104,7 +104,14 @@ class DataConversionConfig:
             return self.joint_names
         if self.robot not in _ROBOT_JOINT_NAMES_DEFAULT:
             raise ValueError(f"No joint names found for robot: {self.robot}")
-        return _ROBOT_JOINT_NAMES_DEFAULT[self.robot]
+        
+        default_joints = _ROBOT_JOINT_NAMES_DEFAULT[self.robot]
+        
+        if self.robot == "g1" and getattr(self.robot_config, "ROBOT_DOF", 29) == 23:
+            exclude = {"waist_roll_joint", "waist_pitch_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint"}
+            return [j for j in default_joints if j not in exclude]
+            
+        return default_joints
 
     JOINT_NAMES = property(
         _joint_names,

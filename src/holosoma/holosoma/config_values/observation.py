@@ -1,3 +1,4 @@
+from holosoma.config_values.wbt.g1_23dof.observation import g1_23dof_wbt_observation, g1_23dof_wbt_observation_w_object
 """Default observation manager configurations."""
 
 from holosoma.config_values.loco.g1.observation import g1_29dof_loco_single_wolinvel
@@ -11,5 +12,7 @@ DEFAULTS = {
     "t1_29dof_loco_single_wolinvel": t1_29dof_loco_single_wolinvel,
     "g1_29dof_loco_single_wolinvel": g1_29dof_loco_single_wolinvel,
     "g1_29dof_wbt": g1_29dof_wbt_observation,
+    "g1_23dof_wbt": g1_23dof_wbt_observation,
     "g1_29dof_wbt_w_object": g1_29dof_wbt_observation_w_object,
+    "g1_23dof_wbt_w_object": g1_23dof_wbt_observation_w_object,
 }

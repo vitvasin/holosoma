@@ -65,11 +65,45 @@ g1_29dof_wbt = InferenceConfig(
     secondary=_g1_safety_secondary,
 )
 
+# fmt: off
+_g1_23dof_wbt_robot = replace(
+    robot.g1_23dof,
+    stiff_startup_pos=(
+        -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,   # left leg
+        -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,   # right leg
+        0.0,                                      # waist yaw
+        0.2, 0.2, 0.0, 0.6, 0.0,                 # left arm
+        0.2, -0.2, 0.0, 0.6, 0.0,                # right arm
+    ),
+    stiff_startup_kp=(
+        350.0, 200.0, 200.0, 300.0, 300.0, 150.0,
+        350.0, 200.0, 200.0, 300.0, 300.0, 150.0,
+        200.0,
+        40.0, 40.0, 40.0, 40.0, 40.0,
+        40.0, 40.0, 40.0, 40.0, 40.0,
+    ),
+    stiff_startup_kd=(
+        5.0, 5.0, 5.0, 10.0, 5.0, 5.0,
+        5.0, 5.0, 5.0, 10.0, 5.0, 5.0,
+        5.0,
+        3.0, 3.0, 3.0, 3.0, 3.0,
+        3.0, 3.0, 3.0, 3.0, 3.0,
+    ),
+)
+
+g1_23dof_wbt = InferenceConfig(
+    robot=_g1_23dof_wbt_robot,
+# fmt: on
+    observation=observation.wbt,
+    task=task.wbt,
+)
+
 # Core defaults - no extension imports at module load time
 DEFAULTS = {
     "g1-29dof-loco": g1_29dof_loco,
     "t1-29dof-loco": t1_29dof_loco,
     "g1-29dof-wbt": g1_29dof_wbt,
+    "g1-23dof-wbt": g1_23dof_wbt,
 }
 
 # Track whether extensions have been loaded
