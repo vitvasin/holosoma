@@ -168,7 +168,8 @@ if [ "$MODE" = "hardware" ]; then
     cd "$PROJECT_ROOT"
     python src/holosoma_inference/holosoma_inference/run_policy.py \
         inference:g1-23dof-wbt \
-        --task.model-path "$ONNX_PATH"
+        --task.model-path="$ONNX_PATH" \
+        --observation.groups.actor_obs.history-length=4
 
     echo "Done."
     exit 0
