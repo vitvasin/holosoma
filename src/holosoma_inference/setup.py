@@ -66,12 +66,14 @@ setup(
         ],
         "holosoma.config.robot": [
             "g1-29dof = holosoma_inference.config.config_values.robot:g1_29dof",
+            "g1-23dof = holosoma_inference.config.config_values.robot:g1_23dof",
             "t1-29dof = holosoma_inference.config.config_values.robot:t1_29dof",
         ],
         "holosoma.config.inference": [
             "g1-29dof-loco = holosoma_inference.config.config_values.inference:g1_29dof_loco",
             "t1-29dof-loco = holosoma_inference.config.config_values.inference:t1_29dof_loco",
             "g1-29dof-wbt = holosoma_inference.config.config_values.inference:g1_29dof_wbt",
+            "g1-23dof-wbt = holosoma_inference.config.config_values.inference:g1_23dof_wbt",
         ],
     },
     keywords="humanoid robotics inference policy onnx",

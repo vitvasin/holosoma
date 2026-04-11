@@ -146,13 +146,14 @@ g1_29dof = RobotConfig(
 # G1 23-DOF Robot Config
 # =============================================================================
 
-# G1 23-DOF per-joint action scales (0.25 * effort / p_gain, waist/wrist-yaw joints removed)
+# G1 23-DOF per-joint action scales (0.25 * effort / p_gain, waist-roll/pitch and wrist-pitch/yaw removed)
+# Order must match dof_names: left_leg(6) + right_leg(6) + waist_yaw(1) + left_arm(5) + right_arm(5)
 G1_23DOF_PER_JOINT_ACTION_SCALE = (
     0.547546465219, 0.350661466378, 0.547546465219, 0.350661466378, 0.438577313919, 0.438577313919,  # left leg
     0.547546465219, 0.350661466378, 0.547546465219, 0.350661466378, 0.438577313919, 0.438577313919,  # right leg
-    0.438577313919, 0.438577313919, 0.438577313919, 0.438577313919, 0.438577313919,  # left arm (no wrist yaw)
-    0.438577313919, 0.438577313919, 0.438577313919, 0.438577313919, 0.438577313919,  # right arm (no wrist yaw)
-    0.438577313919,  # torso (waist yaw only)
+    0.438577313919,  # waist yaw
+    0.438577313919, 0.438577313919, 0.438577313919, 0.438577313919, 0.438577313919,  # left arm (no wrist pitch/yaw)
+    0.438577313919, 0.438577313919, 0.438577313919, 0.438577313919, 0.438577313919,  # right arm (no wrist pitch/yaw)
 )
 
 g1_23dof = RobotConfig(

@@ -96,6 +96,7 @@ g1_23dof_wbt = InferenceConfig(
 # fmt: on
     observation=observation.wbt,
     task=task.wbt,
+    secondary=_g1_safety_secondary,
 )
 
 # Core defaults - no extension imports at module load time
