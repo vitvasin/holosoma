@@ -39,9 +39,35 @@ fi
 echo "Python       : $PYTHON ($($PYTHON --version 2>&1))"
 
 # ── Install Python dependencies ───────────────────────────────────────────────
+# Ubuntu 24.04+ marks system Python as externally managed (PEP 668).
+# Strategy: prefer a venv at ~/.holosoma_launcher_env; fall back to
+# --break-system-packages for older distros that don't support venv here.
 echo ""
 echo "Installing Python dependencies..."
-"$PYTHON" -m pip install --user --quiet 'PySide6>=6.5' 'matplotlib>=3.8' tbparse psutil
+
+VENV_DIR="$HOME/.holosoma_launcher_env"
+
+# Ensure python3-venv is available (Ubuntu may need it)
+if ! "$PYTHON" -m venv --help >/dev/null 2>&1; then
+  echo "python3-venv not available, trying to install..."
+  sudo apt-get install -y python3-venv python3-pip --quiet 2>/dev/null || true
+fi
+
+if "$PYTHON" -m venv "$VENV_DIR" --system-site-packages 2>/dev/null; then
+  # Use the venv python for everything
+  PYTHON="$VENV_DIR/bin/python"
+  echo "Venv         : $VENV_DIR"
+  "$PYTHON" -m pip install --quiet --upgrade pip
+  "$PYTHON" -m pip install --quiet 'PySide6>=6.5' 'matplotlib>=3.8' tbparse psutil
+else
+  # Last resort: install into user site (may need --break-system-packages on Ubuntu 24)
+  PIP_OPTS="--user --quiet"
+  if "$PYTHON" -m pip install --user --quiet --dry-run pip 2>&1 | grep -q "externally-managed"; then
+    PIP_OPTS="--user --quiet --break-system-packages"
+  fi
+  "$PYTHON" -m pip install $PIP_OPTS 'PySide6>=6.5' 'matplotlib>=3.8' tbparse psutil
+fi
+
 echo "Dependencies OK."
 
 # ── Pick an icon ─────────────────────────────────────────────────────────────
@@ -68,11 +94,12 @@ Version=1.0
 Type=Application
 Name=Holosoma Launcher
 Comment=Holosoma Whole-Body Tracking Workflow Launcher
-Exec=$PYTHON $LAUNCHER
+Exec=$PYTHON "$LAUNCHER"
 Icon=$ICON
 Terminal=false
 Categories=Science;Robotics;
 StartupWMClass=workflow_launcher
+Keywords=holosoma;robot;training;retarget;
 EOF
 
 chmod +x "$DESKTOP_FILE"
