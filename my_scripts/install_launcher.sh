@@ -72,8 +72,8 @@ echo "Dependencies OK."
 
 # ── Pick an icon ─────────────────────────────────────────────────────────────
 # Prefer SVG (supported by all modern DEs); fall back to PNG or system icon
-ICON_SVG="$PROJECT_ROOT/demo_scripts/holosoma_icon.svg"
-ICON_PNG="$PROJECT_ROOT/demo_scripts/holosoma_icon.png"
+ICON_SVG="$SCRIPT_DIR/holosoma_icon.svg"
+ICON_PNG="$SCRIPT_DIR/holosoma_icon.png"
 if [ -f "$ICON_SVG" ]; then
   ICON="$ICON_SVG"
 elif [ -f "$ICON_PNG" ]; then

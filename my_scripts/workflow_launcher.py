@@ -16,7 +16,7 @@ Features:
     video recording, history length, logger type, alpha init, foot tolerance).
 
 Launch:
-    python demo_scripts/workflow_launcher.py
+    python my_scripts/workflow_launcher.py
 """
 
 from __future__ import annotations
@@ -94,6 +94,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_LAFAN_DIR = PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting/demo_data/lafan"
 DEFAULT_C3D_DIR = PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting/demo_data/c3d"
+DEFAULT_OMOMO_DIR = PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting/demo_data/OMOMO_new"
 DEFAULT_LOGS_DIR = PROJECT_ROOT / "logs/WholeBodyTracking"
 DEFAULT_RETARGET_DIR = "demo_results/g1/robot_only"
 DEFAULT_CONVERT_DIR = "converted_res/robot_only"
@@ -243,6 +244,13 @@ def scan_c3d(directory: Path) -> list[str]:
     if not directory.is_dir():
         return []
     return sorted(p.name for p in directory.glob("*.c3d"))
+
+
+def scan_omomo(directory: Path) -> list[str]:
+    """Return task names (stems) of .npz files in an OMOMO data directory."""
+    if not directory.is_dir():
+        return []
+    return sorted(p.stem for p in directory.glob("*.npz"))
 
 
 def scan_checkpoints(logs_dir: Path) -> list[Path]:
@@ -823,6 +831,7 @@ class WorkflowLauncher(QMainWindow):
         tabs.setMinimumWidth(540)
         tabs.addTab(self._build_lafan_tab(), "LAFAN Tracking")
         tabs.addTab(self._build_c3d_tab(), "C3D Tracking")
+        tabs.addTab(self._build_omomo_tab(), "OMOMO Tracking")
         tabs.addTab(self._build_inference_tab(), "Inference")
         tabs.addTab(self._build_files_tab(), "Browse Files")
         tabs.addTab(self._build_settings_tab(), "Settings")
@@ -995,6 +1004,7 @@ class WorkflowLauncher(QMainWindow):
         for tw in [
             getattr(self, "_lf_training_widgets", None),
             getattr(self, "_c3d_training_widgets", None),
+            getattr(self, "_omomo_training_widgets", None),
         ]:
             if tw:
                 self._refresh_preset_combo(tw)
@@ -1016,6 +1026,7 @@ class WorkflowLauncher(QMainWindow):
         for tw2 in [
             getattr(self, "_lf_training_widgets", None),
             getattr(self, "_c3d_training_widgets", None),
+            getattr(self, "_omomo_training_widgets", None),
         ]:
             if tw2:
                 idx = tw2.preset_combo.findText(name)
@@ -1062,11 +1073,13 @@ class WorkflowLauncher(QMainWindow):
     #  Resource Health
     # ===================================================================
     def _update_all_resource_health(self):
-        """Update health for both LAFAN and C3D tabs."""
+        """Update health for LAFAN, C3D, and OMOMO tabs."""
         if hasattr(self, "_lf_training_widgets") and self._lf_training_widgets:
             self._update_resource_health(self._lf_training_widgets)
         if hasattr(self, "_c3d_training_widgets") and self._c3d_training_widgets:
             self._update_resource_health(self._c3d_training_widgets)
+        if hasattr(self, "_omomo_training_widgets") and self._omomo_training_widgets:
+            self._update_resource_health(self._omomo_training_widgets)
 
     def _update_resource_health(self, tw: _TrainingWidgets):
         """Estimate resource usage and update UI/Run button state."""
@@ -1968,7 +1981,272 @@ class WorkflowLauncher(QMainWindow):
         self._run_script(lines, start_plot=True)
 
     # ===================================================================
-    #  TAB 3 - Inference
+    #  TAB 3 - OMOMO (SMPLH) Retargeting + Tracking
+    # ===================================================================
+    def _build_omomo_tab(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        w = QWidget()
+        lay = QVBoxLayout(w)
+
+        grp1, self._omomo_robot, self._omomo_algo = self._make_robot_algo_group()
+        lay.addWidget(grp1)
+
+        # Data directory
+        dir_grp = QGroupBox("OMOMO Data Directory")
+        dir_lay = QHBoxLayout(dir_grp)
+        self._omomo_data_dir = QLineEdit(str(DEFAULT_OMOMO_DIR))
+        self._omomo_data_dir.setPlaceholderText("Path to OMOMO_new folder")
+        dir_lay.addWidget(self._omomo_data_dir)
+        browse_dir_btn = QPushButton("Browse...")
+        browse_dir_btn.clicked.connect(self._browse_omomo_dir)
+        dir_lay.addWidget(browse_dir_btn)
+        lay.addWidget(dir_grp)
+
+        # Task/sequence selection
+        seq_grp = QGroupBox("Motion Sequence")
+        seq_lay = QVBoxLayout(seq_grp)
+        self._omomo_list = QListWidget()
+        self._omomo_list.setMaximumHeight(150)
+        seq_lay.addWidget(self._omomo_list)
+        btn_row = QHBoxLayout()
+        ref_btn = QPushButton("Refresh List")
+        ref_btn.clicked.connect(self._refresh_omomo)
+        btn_row.addWidget(ref_btn)
+        btn_row.addStretch()
+        seq_lay.addLayout(btn_row)
+        self._omomo_task_edit = QLineEdit()
+        self._omomo_task_edit.setPlaceholderText("Or enter task name manually (e.g. sub3_largebox_003)")
+        seq_lay.addWidget(self._omomo_task_edit)
+        self._omomo_list.currentItemChanged.connect(self._on_omomo_selection_changed)
+        lay.addWidget(seq_grp)
+
+        # Frame range
+        fr_grp = QGroupBox("Frame Range (applied at convert step)")
+        fr_lay = QHBoxLayout(fr_grp)
+        self._omomo_use_range = QCheckBox("Enable frame range")
+        self._omomo_use_range.setChecked(False)
+        self._omomo_use_range.toggled.connect(self._on_omomo_range_toggled)
+        fr_lay.addWidget(self._omomo_use_range)
+        fr_lay.addSpacing(12)
+        fr_lay.addWidget(QLabel("Start:"))
+        self._omomo_fr_start = QSpinBox()
+        self._omomo_fr_start.setRange(0, 999999)
+        self._omomo_fr_start.setValue(0)
+        self._omomo_fr_start.setEnabled(False)
+        fr_lay.addWidget(self._omomo_fr_start)
+        fr_lay.addWidget(QLabel("End:"))
+        self._omomo_fr_end = QSpinBox()
+        self._omomo_fr_end.setRange(1, 999999)
+        self._omomo_fr_end.setValue(500)
+        self._omomo_fr_end.setEnabled(False)
+        fr_lay.addWidget(self._omomo_fr_end)
+        fr_lay.addStretch()
+        lay.addWidget(fr_grp)
+
+        # Training config
+        grp_omomo, self._omomo_training_widgets = self._make_training_group()
+        self._omomo_training_widgets.robot_cb = self._omomo_robot
+        self._omomo_training_widgets.algo_cb = self._omomo_algo
+        lay.addWidget(grp_omomo)
+
+        # GO
+        self._omomo_run_btn = QPushButton("🚀 START OMOMO WORKFLOW")
+        self._omomo_run_btn.setMinimumHeight(48)
+        self._omomo_run_btn.setStyleSheet(BIG_BTN.format(bg="#a6e3a1", hover="#94e2d5", press="#89dceb"))
+        self._omomo_run_btn.clicked.connect(self._run_omomo)
+        self._omomo_training_widgets.run_btn = self._omomo_run_btn
+        lay.addWidget(self._omomo_run_btn)
+
+        lay.addStretch()
+        scroll.setWidget(w)
+
+        self._refresh_omomo()
+        return scroll
+
+    def _browse_omomo_dir(self):
+        path = QFileDialog.getExistingDirectory(self, "Select OMOMO Data Directory", str(PROJECT_ROOT))
+        if path:
+            self._omomo_data_dir.setText(path)
+            self._refresh_omomo()
+
+    def _refresh_omomo(self):
+        self._omomo_list.clear()
+        d = Path(self._omomo_data_dir.text().strip())
+        tasks = scan_omomo(d)
+        if not tasks:
+            self._omomo_list.addItem("(no .npz files found)")
+        for t in tasks:
+            item = QListWidgetItem(t)
+            item.setData(Qt.ItemDataRole.UserRole, t)
+            self._omomo_list.addItem(item)
+
+    def _on_omomo_selection_changed(self, current: QListWidgetItem | None, _prev):
+        if current is None or current.data(Qt.ItemDataRole.UserRole) is None:
+            return
+        self._omomo_task_edit.setText(current.data(Qt.ItemDataRole.UserRole))
+
+    def _on_omomo_range_toggled(self, checked: bool):
+        self._omomo_fr_start.setEnabled(checked)
+        self._omomo_fr_end.setEnabled(checked)
+
+    def _run_omomo(self):
+        # Resolve task name
+        task = self._omomo_task_edit.text().strip()
+        if not task:
+            item = self._omomo_list.currentItem()
+            if item and item.data(Qt.ItemDataRole.UserRole):
+                task = item.data(Qt.ItemDataRole.UserRole)
+        if not task:
+            QMessageBox.warning(self, "No sequence", "Select or enter an OMOMO task name.")
+            return
+
+        dof = self._omomo_robot.currentData()
+        algo = self._omomo_algo.currentData()
+        tw = self._omomo_training_widgets
+        envs = tw.envs.value()
+        iters = tw.iters.value()
+        ep_len = tw.ep_len.value()
+        headless = "True" if tw.headless.isChecked() else "False"
+        video_on = tw.video_enabled.isChecked()
+        vid_int = tw.video_interval.value()
+        history = tw.history_length.value()
+        logger = tw.logger.currentData()
+        stem = f"{dof}dof"
+        exp = f"g1-{stem}-wbt{algo}"
+        retarget_dir = str(PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting")
+        omomo_data_dir = self._omomo_data_dir.text().strip()
+        retarget_out = (
+            PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting"
+            / DEFAULT_RETARGET_DIR / "omomo" / f"{task}.npz"
+        )
+        convert_out = f"{DEFAULT_CONVERT_DIR}/omomo/{task}_mj_fps50.npz"
+        converted_file = f"{retarget_dir}/{DEFAULT_CONVERT_DIR}/omomo/{task}_mj_fps50.npz"
+
+        # Overwrite check
+        skip_retarget = False
+        if retarget_out.exists():
+            reply = QMessageBox.question(
+                self, "Retargeted file exists",
+                f"Retargeted output already exists:\n{retarget_out}\n\nOverwrite it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            skip_retarget = (reply == QMessageBox.StandardButton.No)
+
+        # Frame range
+        use_range = self._omomo_use_range.isChecked()
+        fr_start = self._omomo_fr_start.value()
+        fr_end = self._omomo_fr_end.value()
+
+        video_lines: list[str] = []
+        if video_on:
+            video_lines = [
+                "    --logger.video.enabled True \\",
+                f"    --logger.video.interval {vid_int} \\",
+                f'    --logger.video.save-dir "{DEFAULT_VIDEO_DIR}/g1_{stem}_omomo_wbt" \\',
+            ]
+        else:
+            video_lines = [
+                "    --logger.video.enabled False \\",
+            ]
+
+        history_line = ""
+        if history > 1:
+            history_line = f"    --observation.groups.actor_obs.history-length {history} \\"
+
+        range_suffix = f" (frames {fr_start}-{fr_end})" if use_range else ""
+        convert_range_arg = f"    --line-range {fr_start} {fr_end} \\" if use_range else ""
+
+        if skip_retarget:
+            retarget_lines: list[str] = [
+                f'echo "Skipping retargeting — using existing: {retarget_out}"',
+            ]
+        else:
+            retarget_lines = [
+                f'echo "Retargeting {task} (SMPLH/OMOMO)..."',
+                "python examples/robot_retarget.py \\",
+                f"    --robot-config.robot-dof {dof} \\",
+                f'    --data_path "{omomo_data_dir}" \\',
+                "    --task-type robot_only \\",
+                f'    --task-name "{task}" \\',
+                "    --data_format smplh \\",
+                f'    --save_dir "{DEFAULT_RETARGET_DIR}/omomo"',
+            ]
+            if use_range:
+                retarget_lines.insert(-1, f"    --line-range {fr_start} {fr_end} \\")
+
+        convert_lines = [
+            f'echo "Converting to MuJoCo format{range_suffix}..."',
+            "python data_conversion/convert_data_format_mj.py \\",
+            f"    --robot-config.robot-dof {dof} \\",
+            f'    --input_file "{DEFAULT_RETARGET_DIR}/omomo/{task}.npz" \\',
+            "    --output_fps 50 \\",
+            f'    --output_name "{convert_out}" \\',
+            "    --data_format smplh \\",
+            '    --object_name "ground" \\',
+        ]
+        if convert_range_arg:
+            convert_lines.append(convert_range_arg)
+        convert_lines.append("    --once")
+
+        lines = [
+            f'echo "=== OMOMO Workflow: {task} (G1-{stem}) ==="',
+            "",
+            "# ── Step 1: Retargeting env ──",
+            f'source "{PROJECT_ROOT}/scripts/source_retargeting_setup.sh"',
+            f'pip install -e "{PROJECT_ROOT}/src/holosoma_retargeting" --quiet',
+            f'cd "{retarget_dir}"',
+            "",
+            "# ── Step 2: Retarget ──",
+            *retarget_lines,
+            "",
+            "# ── Step 3: Convert ──",
+            *convert_lines,
+            "",
+            "# ── Step 4: IsaacSim env ──",
+            f'cd "{PROJECT_ROOT}"',
+            "unset CONDA_ENV_NAME",
+            f'source "{PROJECT_ROOT}/scripts/source_isaacsim_setup.sh"',
+            f'HOLOSOMA_DEPS_DIR="${{HOLOSOMA_DEPS_DIR:-$HOME/.holosoma_deps}}"',
+            f'pip install -e "{PROJECT_ROOT}/src/holosoma" --quiet',
+            'if ! python -c "import isaaclab" 2>/dev/null; then',
+            '    pip install "setuptools<81" --quiet',
+            "    echo 'setuptools<81' > /tmp/hs-build-constraints.txt",
+            "    PIP_BUILD_CONSTRAINT=/tmp/hs-build-constraints.txt CMAKE_POLICY_VERSION_MINIMUM=3.5 \\",
+            '        pip install -e "$HOLOSOMA_DEPS_DIR/IsaacLab/source/isaaclab" --quiet',
+            "    rm /tmp/hs-build-constraints.txt",
+            "fi",
+            "",
+            "# ── Step 5: Train ──",
+            f'echo "Starting training ({exp})..."',
+            "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python src/holosoma/holosoma/train_agent.py \\",
+            f"    exp:{exp} \\",
+            f"    logger:{logger} \\",
+            f'    --logger.base-dir "{DEFAULT_LOGS_DIR.relative_to(PROJECT_ROOT)}" \\',
+            f"    --training.headless {headless} \\",
+            f"    --training.num-envs {envs} \\",
+            f"    --algo.config.num-learning-iterations {iters} \\",
+            f"    --simulator.config.sim.max-episode-length-s {ep_len} \\",
+        ]
+        lines.extend(video_lines)
+        if history_line:
+            lines.append(history_line)
+        lines.append(
+            f"    --command.setup_terms.motion_command.params.motion_config.motion_file={converted_file}"
+        )
+        lines += [
+            "",
+            'echo "=== OMOMO Workflow complete! ==="',
+        ]
+
+        self._log_info(f"Starting OMOMO workflow: {task} | {exp} | envs={envs} iters={iters}")
+        self._plot_widget.set_target_iters(iters)
+        self._run_script(lines, start_plot=True)
+
+    # ===================================================================
+    #  TAB 4 - Inference
     # ===================================================================
     def _build_inference_tab(self):
         scroll = QScrollArea()
@@ -1977,12 +2255,85 @@ class WorkflowLauncher(QMainWindow):
         w = QWidget()
         lay = QVBoxLayout(w)
 
+        # ── Shared Inference Config ──
+        cfg_grp = QGroupBox("Inference Configuration")
+        cfg_grid = QGridLayout(cfg_grp)
+        cfg_grid.setColumnStretch(1, 1)
+        cfg_grid.setColumnStretch(3, 1)
+
+        row = 0
+        cfg_grid.addWidget(QLabel("Robot Config:"), row, 0)
+        self._inf_robot_cb = QComboBox()
+        self._inf_robot_cb.addItem("G1-23DOF WBT", "g1-23dof-wbt")
+        self._inf_robot_cb.addItem("G1-29DOF WBT", "g1-29dof-wbt")
+        self._inf_robot_cb.addItem("G1-29DOF Loco", "g1-29dof-loco")
+        cfg_grid.addWidget(self._inf_robot_cb, row, 1)
+
+        cfg_grid.addWidget(QLabel("Obs History:"), row, 2)
+        self._inf_history = QSpinBox()
+        self._inf_history.setRange(1, 16)
+        self._inf_history.setValue(1)
+        self._inf_history.setToolTip(
+            "Must match training value (--observation.groups.actor_obs.history-length).\n"
+            "Check your training config or run log."
+        )
+        cfg_grid.addWidget(self._inf_history, row, 3)
+
+        row += 1
+        cfg_grid.addWidget(QLabel("RL Rate (Hz):"), row, 0)
+        self._inf_rl_rate = QSpinBox()
+        self._inf_rl_rate.setRange(10, 200)
+        self._inf_rl_rate.setValue(50)
+        self._inf_rl_rate.setToolTip("Policy inference rate in Hz (task.rl-rate)")
+        cfg_grid.addWidget(self._inf_rl_rate, row, 1)
+
+        cfg_grid.addWidget(QLabel("Action Scale:"), row, 2)
+        self._inf_action_scale = QDoubleSpinBox()
+        self._inf_action_scale.setRange(0.01, 2.0)
+        self._inf_action_scale.setSingleStep(0.05)
+        self._inf_action_scale.setDecimals(3)
+        self._inf_action_scale.setValue(0.25)
+        self._inf_action_scale.setToolTip("Policy action scale (task.policy-action-scale)")
+        cfg_grid.addWidget(self._inf_action_scale, row, 3)
+
+        row += 1
+        cfg_grid.addWidget(QLabel("Input:"), row, 0)
+        self._inf_input_cb = QComboBox()
+        self._inf_input_cb.addItem("Keyboard", "keyboard")
+        self._inf_input_cb.addItem("Joystick / Gamepad", "joystick")
+        self._inf_input_cb.setToolTip("Velocity + state input source (task.velocity-input / task.state-input)")
+        cfg_grid.addWidget(self._inf_input_cb, row, 1)
+
+        cfg_grid.addWidget(QLabel("Network Interface:"), row, 2)
+        self._inf_interface = QLineEdit("auto")
+        self._inf_interface.setToolTip(
+            "DDS network interface (task.interface).\n"
+            "Use 'auto' to detect, or set explicitly e.g. 'eth0'."
+        )
+        cfg_grid.addWidget(self._inf_interface, row, 3)
+
+        row += 1
+        self._inf_scale_by_effort = QCheckBox("Scale actions by effort/Kp")
+        self._inf_scale_by_effort.setChecked(True)
+        self._inf_scale_by_effort.setToolTip(
+            "task.action-scales-by-effort-limit-over-p-gain\n"
+            "Enable for WBT models trained with action_scales_by_effort_limit_over_p_gain=True."
+        )
+        cfg_grid.addWidget(self._inf_scale_by_effort, row, 0, 1, 2)
+
+        self._inf_use_phase = QCheckBox("Use gait phase obs")
+        self._inf_use_phase.setChecked(True)
+        self._inf_use_phase.setToolTip("task.use-phase — enable for locomotion policies, disable for WBT-only.")
+        cfg_grid.addWidget(self._inf_use_phase, row, 2, 1, 2)
+
+        lay.addWidget(cfg_grp)
+
         # ── Simulation Inference ──
-        sim_grp = QGroupBox("Simulation Inference (IsaacSim)")
+        sim_grp = QGroupBox("Simulation Inference (IsaacSim) — Export ONNX")
         sim_lay = QVBoxLayout(sim_grp)
         sim_lay.addWidget(QLabel("Select a trained checkpoint:"))
         self._sim_ckpt_list = QListWidget()
-        self._sim_ckpt_list.setMaximumHeight(180)
+        self._sim_ckpt_list.setMaximumHeight(150)
         sim_lay.addWidget(self._sim_ckpt_list)
         ref_btn = QPushButton("Refresh Checkpoints")
         ref_btn.clicked.connect(self._refresh_checkpoints)
@@ -2004,7 +2355,7 @@ class WorkflowLauncher(QMainWindow):
         hw_lay = QVBoxLayout(hw_grp)
         hw_lay.addWidget(QLabel("Select an ONNX model:"))
         self._hw_onnx_list = QListWidget()
-        self._hw_onnx_list.setMaximumHeight(140)
+        self._hw_onnx_list.setMaximumHeight(120)
         hw_lay.addWidget(self._hw_onnx_list)
         btn_row = QHBoxLayout()
         ref_onnx = QPushButton("Refresh ONNX")
@@ -2016,7 +2367,7 @@ class WorkflowLauncher(QMainWindow):
         btn_row.addStretch()
         hw_lay.addLayout(btn_row)
         self._hw_onnx_path = QLineEdit()
-        self._hw_onnx_path.setPlaceholderText("Or enter ONNX path")
+        self._hw_onnx_path.setPlaceholderText("Or enter ONNX path manually")
         hw_lay.addWidget(self._hw_onnx_path)
 
         warn = QLabel("WARNING: This will control the physical G1 robot!\n"
@@ -2086,6 +2437,7 @@ class WorkflowLauncher(QMainWindow):
             return
         ckpt = item.data(Qt.ItemDataRole.UserRole)
         headless = "True" if self._sim_headless.isChecked() else "False"
+        history = self._inf_history.value()
 
         lines = [
             'echo "=== Simulation Inference ==="',
@@ -2100,7 +2452,8 @@ class WorkflowLauncher(QMainWindow):
             f'    --checkpoint "{ckpt}" \\',
             "    --training.export-onnx True \\",
             "    --training.num-envs 1 \\",
-            f"    --training.headless {headless}",
+            f"    --training.headless {headless} \\",
+            f"    --observation.groups.actor_obs.history-length {history}",
             "",
             'echo "=== Simulation inference complete! ==="',
         ]
@@ -2128,6 +2481,15 @@ class WorkflowLauncher(QMainWindow):
             self._log_info("Hardware deployment cancelled.")
             return
 
+        robot_cfg = self._inf_robot_cb.currentData()
+        history = self._inf_history.value()
+        rl_rate = self._inf_rl_rate.value()
+        action_scale = self._inf_action_scale.value()
+        input_src = self._inf_input_cb.currentData()
+        interface = self._inf_interface.text().strip() or "auto"
+        scale_by_effort = "True" if self._inf_scale_by_effort.isChecked() else "False"
+        use_phase = "True" if self._inf_use_phase.isChecked() else "False"
+
         lines = [
             'echo "=== Hardware Inference ==="',
             f'echo "ONNX: {onnx_path}"',
@@ -2138,9 +2500,16 @@ class WorkflowLauncher(QMainWindow):
             "",
             f'cd "{PROJECT_ROOT}"',
             "python src/holosoma_inference/holosoma_inference/run_policy.py \\",
-            "    inference:g1-23dof-wbt \\",
+            f"    inference:{robot_cfg} \\",
             f'    --task.model-path="{onnx_path}" \\',
-            "    --observation.groups.actor_obs.history-length=4",
+            f"    --observation.groups.actor_obs.history-length={history} \\",
+            f"    --task.rl-rate={rl_rate} \\",
+            f"    --task.policy-action-scale={action_scale} \\",
+            f"    --task.action-scales-by-effort-limit-over-p-gain={scale_by_effort} \\",
+            f"    --task.use-phase={use_phase} \\",
+            f"    --task.velocity-input={input_src} \\",
+            f"    --task.state-input={input_src} \\",
+            f"    --task.interface={interface}",
             "",
             'echo "=== Hardware inference complete! ==="',
         ]

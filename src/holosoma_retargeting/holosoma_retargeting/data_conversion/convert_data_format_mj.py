@@ -162,7 +162,10 @@ class MotionLoader:
             self.motion_base_poss_input = motion[:, :3]
             self.motion_base_rots_input = motion[:, 3:7]
 
-        self.motion_dof_poss_input = motion[:, 7:36]
+        n_root = 7
+        n_object = 7 if self.has_dynamic_object else 0
+        n_dof = motion.shape[1] - n_root - n_object
+        self.motion_dof_poss_input = motion[:, n_root : n_root + n_dof]
 
         if self.has_dynamic_object:
             if self.use_omniretarget_data:
