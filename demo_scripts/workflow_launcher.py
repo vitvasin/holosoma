@@ -21,17 +21,36 @@ Launch:
 
 from __future__ import annotations
 
+import json
 import sys
+import time
+import warnings
+import subprocess
 from pathlib import Path
+
+import psutil
+import numpy as np
+
+# Suppress Matplotlib Axes3D warning (occurs if multiple versions are installed)
+warnings.filterwarnings("ignore", message=".*Unable to import Axes3D.*")
 
 import matplotlib as mpl
 
 mpl.use("QtAgg")
 
+# The system mpl_toolkits may be from an older distro matplotlib and is
+# incompatible with the user-installed version. Override __path__ to force
+# loading from the same site-packages tree as our matplotlib.
+# This MUST happen before importing matplotlib.figure / matplotlib.backends,
+# because those internally try to import Axes3D and register the '3d' projection.
+import mpl_toolkits as _mpl_toolkits_pkg
+_mpl_toolkits_pkg.__path__ = [str(Path(mpl.__file__).parent.parent / "mpl_toolkits")]
+
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from mpl_toolkits.mplot3d import Axes3D
 from PySide6.QtCore import QProcess, QTimer, Qt, Slot
-from PySide6.QtGui import QColor, QFont, QTextCursor
+from PySide6.QtGui import QColor, QFont, QPalette, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -42,14 +61,17 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
+    QSlider,
     QSpinBox,
     QSplitter,
     QTabWidget,
@@ -74,19 +96,22 @@ DEFAULT_LAFAN_DIR = PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargetin
 DEFAULT_C3D_DIR = PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting/demo_data/c3d"
 DEFAULT_LOGS_DIR = PROJECT_ROOT / "logs/WholeBodyTracking"
 DEFAULT_RETARGET_DIR = "demo_results/g1/robot_only"
-DEFAULT_CONVERT_DIR = "converted_res"
+DEFAULT_CONVERT_DIR = "converted_res/robot_only"
 DEFAULT_VIDEO_DIR = "logs/videos"
+PRESETS_DIR = PROJECT_ROOT / "configs" / "launcher_presets"
 
 ROBOTS = [("23", "G1-23DOF"), ("29", "G1-29DOF")]
+# Values are the exp: subcommand suffix appended to "g1-{N}dof-wbt".
+# Empty string = PPO base preset (exp:g1-{N}dof-wbt)
+# "-fast-sac"   = Fast-SAC preset (exp:g1-{N}dof-wbt-fast-sac)
 ALGORITHMS = [
-    ("fast-sac", "Fast SAC (default)"),
-    ("ppo", "PPO"),
-    ("fast-sac-no-dr", "Fast SAC (no domain rand.)"),
+    ("-fast-sac", "Fast SAC (default)"),
+    ("", "PPO (base)"),
 ]
 LOGGERS = [
     ("wandb-offline", "W&B Offline (default)"),
     ("wandb", "W&B Online"),
-    ("tensorboard", "TensorBoard"),
+    ("disabled", "Disabled"),
 ]
 
 # Metrics to plot -- same 4 panels as plot_rewards.py
@@ -97,6 +122,32 @@ PLOT_METRICS = {
     "Curriculum Entropy": lambda t: "adaptive_timesteps_sampler_entropy" in t.lower(),
 }
 PLOT_COLORS = ["#89b4fa", "#a6e3a1", "#f9e2af", "#f38ba8"]
+
+# Resource estimation constants
+# Calibrated from OOM trace: 4096 envs, history=4, SAC, headless
+#   actor_obs_dim=496, critic_obs_dim=256 (already include history concat)
+#   OOM hit at critic_observations alloc (4.00 GiB) with 21.30 GB used already
+#   => observations(7.75) + next_obs(7.75) + actions(0.36) = 15.86 GB buffer so far
+#   => sim + models overhead = 21.30 - 15.86 = 5.44 GB at 4096 envs
+#
+# SAC replay buffer (4 tensors, buf_size=1024 default):
+#   per env = 2*(actor_obs + critic_obs)*buf_size*4B
+#   base dims (history=1): actor~124, critic~64  -> 0.00143 GB/env
+#   scales linearly with history (obs = base_dim * history)
+#
+# Sim overhead: ~2 GB fixed + 0.00084 GB/env
+#   at 4096 envs: 2.0 + 3.44 = 5.44 GB  ✓
+VRAM_BASE_HEADLESS = 2.0    # GB fixed (IsaacSim process + neural net models)
+VRAM_BASE_GUI      = 3.5    # GB (adds viewport/render overhead)
+VRAM_PER_ENV_SIM   = 0.00084  # GB per env for physics/sim tensors
+VRAM_ALGO_PPO      = 0.5    # GB extra for PPO rollout buffers
+# SAC replay buffer: 2*(actor_obs_dim+critic_obs_dim)*buf_size*4B per env, dims scale with history
+# base obs_dim (history=1): actor~124, critic~64; buf_size=1024 (default)
+# = 2*(124+64)*1024*4 / 1024^3 = 0.00143 GB per env at history=1; linear with history
+VRAM_SAC_BUF_PER_ENV_PER_HIST = 0.00143  # GB per env per history step
+
+RAM_BASE           = 4.5    # GB (System + Base Isaac)
+RAM_PER_ENV        = 0.0006  # GB per env
 
 # ---------------------------------------------------------------------------
 # Style
@@ -160,6 +211,11 @@ QScrollBar:vertical {
 }
 QScrollBar::handle:vertical { background: #585b70; border-radius: 4px; min-height: 30px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QProgressBar { 
+    border: 1px solid #45475a; border-radius: 4px; background: #313244;
+    text-align: center; height: 14px; font-weight: bold; font-size: 10px; color: #1e1e2e;
+}
+QProgressBar::chunk { background-color: #a6e3a1; border-radius: 3px; }
 """
 
 BIG_BTN = """
@@ -233,6 +289,8 @@ class TrainingPlotWidget(QWidget):
         super().__init__(parent)
         self._log_dir: Path | None = None
         self._last_read_size: dict[str, int] = {}  # track file sizes to detect new data
+        self._eta_samples: list[tuple[float, int]] = []  # (wall_time, step) for ETA calc
+        self._target_iters: int = 0
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -254,6 +312,30 @@ class TrainingPlotWidget(QWidget):
 
         self._canvas = FigureCanvasQTAgg(self._fig)
         lay.addWidget(self._canvas)
+
+        # Folder picker row
+        folder_row = QHBoxLayout()
+        folder_lbl = QLabel("Log dir:")
+        folder_lbl.setStyleSheet("color: #9399b2; font-size: 11px;")
+        folder_lbl.setFixedWidth(52)
+        folder_row.addWidget(folder_lbl)
+        self._dir_edit = QLineEdit()
+        self._dir_edit.setPlaceholderText("auto-detect latest run")
+        self._dir_edit.setStyleSheet(
+            "background:#313244; color:#cdd6f4; border:1px solid #45475a;"
+            " border-radius:4px; padding:2px 6px; font-size:11px;"
+        )
+        self._dir_edit.editingFinished.connect(self._on_dir_edited)
+        folder_row.addWidget(self._dir_edit)
+        browse_btn = QPushButton("Browse…")
+        browse_btn.setFixedWidth(70)
+        browse_btn.setStyleSheet(
+            "background:#313244; color:#cdd6f4; border:1px solid #45475a;"
+            " border-radius:4px; padding:2px 6px; font-size:11px;"
+        )
+        browse_btn.clicked.connect(self._browse_log_dir)
+        folder_row.addWidget(browse_btn)
+        lay.addLayout(folder_row)
 
         # Controls
         ctrl = QHBoxLayout()
@@ -294,10 +376,16 @@ class TrainingPlotWidget(QWidget):
                         transform=ax.transAxes)
         self._canvas.draw_idle()
 
+    def set_target_iters(self, n: int) -> None:
+        self._target_iters = n
+        self._eta_samples.clear()
+
     def start_monitoring(self, log_dir: Path | None = None):
         """Start polling for new TensorBoard events."""
         self._log_dir = log_dir
         self._last_read_size.clear()
+        self._eta_samples.clear()
+        self._dir_edit.setText(str(log_dir) if log_dir else "")
         self._draw_empty()
         if HAS_TBPARSE:
             self._timer.start(10_000)  # 10s interval
@@ -306,6 +394,33 @@ class TrainingPlotWidget(QWidget):
     def stop_monitoring(self):
         self._timer.stop()
         self._status_lbl.setText("Monitoring stopped")
+
+    @Slot()
+    def _browse_log_dir(self):
+        start = str(self._log_dir) if self._log_dir else str(DEFAULT_LOGS_DIR)
+        chosen = QFileDialog.getExistingDirectory(self, "Select TensorBoard log directory", start)
+        if chosen:
+            self._apply_new_dir(Path(chosen))
+
+    @Slot()
+    def _on_dir_edited(self):
+        text = self._dir_edit.text().strip()
+        if text:
+            self._apply_new_dir(Path(text))
+        else:
+            # Empty = revert to auto-detect
+            self._log_dir = None
+            self._last_read_size.clear()
+            self._status_lbl.setText("Monitoring: auto-detect latest run")
+            self.refresh_plot()
+
+    def _apply_new_dir(self, path: Path):
+        self._log_dir = path
+        self._last_read_size.clear()
+        self._dir_edit.setText(str(path))
+        if HAS_TBPARSE:
+            self._status_lbl.setText(f"Monitoring: {path.name}")
+        self.refresh_plot()
 
     @Slot()
     def refresh_plot(self):
@@ -346,7 +461,6 @@ class TrainingPlotWidget(QWidget):
         titles = list(PLOT_METRICS.keys())
         matchers = list(PLOT_METRICS.values())
 
-        data_found = False
         for i, ax in enumerate(self._axes.flat):
             ax.clear()
             ax.set_facecolor("#313244")
@@ -365,7 +479,6 @@ class TrainingPlotWidget(QWidget):
                 steps = subset["step"].values
                 values = subset["value"].values
                 if len(steps) > 0:
-                    data_found = True
                     ax.plot(steps, values, color=PLOT_COLORS[i], linewidth=1.2,
                             marker="o", markersize=1.5, alpha=0.85)
             else:
@@ -375,11 +488,284 @@ class TrainingPlotWidget(QWidget):
         self._canvas.draw_idle()
         n_points = len(df)
         run_name = log_dir.name
-        self._status_lbl.setText(f"Run: {run_name}  |  {n_points} data points")
+
+        # ETA calculation — use mean reward tag as the iteration counter
+        eta_str = ""
+        try:
+            step_col = df["step"]
+            current_step = int(step_col.max())
+            now = time.monotonic()
+            self._eta_samples.append((now, current_step))
+            if len(self._eta_samples) > 10:
+                self._eta_samples = self._eta_samples[-10:]
+            if len(self._eta_samples) >= 2 and self._target_iters > 0:
+                t0, s0 = self._eta_samples[0]
+                t1, s1 = self._eta_samples[-1]
+                dt = t1 - t0
+                ds = s1 - s0
+                if dt > 0 and ds > 0:
+                    steps_per_sec = ds / dt
+                    remaining = max(0, self._target_iters - current_step)
+                    eta_sec = remaining / steps_per_sec
+                    if eta_sec < 60:
+                        eta_str = f"  |  ETA: {eta_sec:.0f}s"
+                    elif eta_sec < 3600:
+                        eta_str = f"  |  ETA: {eta_sec/60:.0f}m"
+                    else:
+                        h = int(eta_sec // 3600)
+                        m = int((eta_sec % 3600) // 60)
+                        eta_str = f"  |  ETA: {h}h {m}m"
+        except Exception:
+            eta_str = ""
+
+        self._status_lbl.setText(f"Run: {run_name}  |  {n_points} pts{eta_str}")
 
     def set_log_dir(self, path: Path):
-        self._log_dir = path
-        self._last_read_size.clear()
+        self._apply_new_dir(path)
+
+
+# ---------------------------------------------------------------------------
+# LAFAN1 skeleton: 22 joints, parent indices (-1 = root)
+# ---------------------------------------------------------------------------
+_LAFAN_PARENTS = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19, 20, 21]
+_LAFAN_NAMES = [
+    "root", "lhip", "rhip", "belly",
+    "lknee", "rknee", "spine",
+    "lankle", "rankle", "chest",
+    "ltoes", "rtoes", "neck",
+    "linshoulder", "rinshoulder", "head",
+    "lshoulder", "rshoulder",
+    "lelbow", "relbow",
+    "lwrist", "rwrist",
+]
+
+
+# ---------------------------------------------------------------------------
+# Motion Preview Dialog
+# ---------------------------------------------------------------------------
+class MotionPreviewDialog(QWidget):
+    """Standalone window to preview a .npy motion file (LAFAN1 format).
+
+    Shows a 3D skeleton plot with a frame scrubber and play/pause.
+    """
+
+    def __init__(self, npy_path: Path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Motion Preview — {npy_path.name}")
+        self.setWindowFlags(Qt.WindowType.Window)
+        self.setMinimumSize(760, 560)
+        self.setStyleSheet(STYLESHEET)
+
+        self._path = npy_path
+        self._data: np.ndarray | None = None
+        self._frame = 0
+        self._playing = False
+        self._play_timer = QTimer(self)
+        self._play_timer.timeout.connect(self._next_frame)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 8, 8, 8)
+
+        # Info bar
+        self._info_lbl = QLabel("Loading…")
+        self._info_lbl.setStyleSheet("color: #89b4fa; font-size: 11px; padding: 2px 4px;")
+        lay.addWidget(self._info_lbl)
+
+        # Main splitter: left = plot, right = metadata
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # 3D matplotlib canvas
+        self._fig = Figure(figsize=(5, 4), facecolor="#1e1e2e")
+        self._ax: Axes3D = self._fig.add_subplot(111, projection="3d")
+        
+        # Set good initial view angle: 20 deg elevation, 45 deg azimuth
+        self._ax.view_init(elev=20, azim=45)
+        
+        self._canvas = FigureCanvasQTAgg(self._fig)
+        splitter.addWidget(self._canvas)
+
+        # Metadata panel
+        meta_box = QGroupBox("Sequence Info")
+        meta_lay = QVBoxLayout(meta_box)
+        self._meta_text = QTextEdit()
+        self._meta_text.setReadOnly(True)
+        self._meta_text.setMaximumWidth(200)
+        self._meta_text.setStyleSheet(
+            "background:#313244; color:#cdd6f4; font-size:11px; border:none;"
+        )
+        meta_lay.addWidget(self._meta_text)
+        splitter.addWidget(meta_box)
+        splitter.setSizes([560, 200])
+        lay.addWidget(splitter, 1)
+
+        # Frame controls
+        ctrl = QHBoxLayout()
+        self._play_btn = QPushButton("Play")
+        self._play_btn.setFixedWidth(60)
+        self._play_btn.clicked.connect(self._toggle_play)
+        ctrl.addWidget(self._play_btn)
+
+        self._frame_lbl = QLabel("Frame: 0 / 0")
+        self._frame_lbl.setFixedWidth(100)
+        ctrl.addWidget(self._frame_lbl)
+
+        self._slider = QSlider(Qt.Orientation.Horizontal)
+        self._slider.setMinimum(0)
+        self._slider.setValue(0)
+        self._slider.valueChanged.connect(self._on_slider)
+        ctrl.addWidget(self._slider)
+
+        fps_lbl = QLabel("FPS:")
+        ctrl.addWidget(fps_lbl)
+        self._fps_spin = QSpinBox()
+        self._fps_spin.setRange(1, 120)
+        self._fps_spin.setValue(30)
+        self._fps_spin.setFixedWidth(55)
+        self._fps_spin.valueChanged.connect(self._update_timer_interval)
+        ctrl.addWidget(self._fps_spin)
+
+        lay.addLayout(ctrl)
+
+        # Load data after show
+        QTimer.singleShot(50, self._load_data)
+
+    # ------------------------------------------------------------------
+    def _load_data(self):
+        try:
+            data = np.load(str(self._path))
+        except Exception as e:
+            self._info_lbl.setText(f"Error loading file: {e}")
+            return
+
+        if data.ndim != 3 or data.shape[2] != 3:
+            self._info_lbl.setText(
+                f"Unexpected shape {data.shape}. Expected (T, J, 3)."
+            )
+            return
+
+        self._data = data
+        T, J, _ = data.shape
+        self._slider.setMaximum(T - 1)
+
+        # Metadata text
+        size_mb = self._path.stat().st_size / 1024 / 1024
+        known = J == len(_LAFAN_NAMES)
+        meta = (
+            f"File: {self._path.name}\n"
+            f"Size: {size_mb:.2f} MB\n\n"
+            f"Frames (T): {T}\n"
+            f"Joints (J): {J}\n"
+            f"Shape: ({T}, {J}, 3)\n\n"
+            f"Skeleton: {'LAFAN1 (22J)' if known else f'Unknown ({J}J)'}\n\n"
+            f"X range: [{data[:,:,0].min():.2f}, {data[:,:,0].max():.2f}]\n"
+            f"Y range: [{data[:,:,1].min():.2f}, {data[:,:,1].max():.2f}]\n"
+            f"Z range: [{data[:,:,2].min():.2f}, {data[:,:,2].max():.2f}]\n"
+        )
+        self._meta_text.setPlainText(meta)
+        self._info_lbl.setText(
+            f"{self._path.name}  |  {T} frames  |  {J} joints  |  {size_mb:.1f} MB"
+        )
+
+        self._draw_frame(0)
+
+    def _draw_frame(self, frame_idx: int):
+        if self._data is None:
+            return
+    
+        # LAFAN1 data is typically Y-UP. Matplotlib 3D is Z-UP by default.
+        # We map Data(X, Y, Z) -> Plot(X, Z, Y) so the character stands upright.
+        data = self._data
+        J = data.shape[1]
+        raw_pts = data[frame_idx]  # (J, 3) -> [x, y, z] (y is up)
+        
+        # Coordinate mapping for upright visualization
+        pts = np.zeros_like(raw_pts)
+        pts[:, 0] = raw_pts[:, 0]  # Side (X)
+        pts[:, 1] = raw_pts[:, 2]  # Depth (Z)
+        pts[:, 2] = raw_pts[:, 1]  # Height (Y)
+    
+        ax = self._ax
+        # Save current view orientation to prevent resets during play
+        elev, azim = ax.elev, ax.azim
+        
+        ax.clear()
+        ax.set_facecolor("#1e1e2e")
+        ax.set_xlabel("Side (X)", color="#9399b2", fontsize=7)
+        ax.set_ylabel("Depth (Z)", color="#9399b2", fontsize=7)
+        ax.set_zlabel("Height (Y)", color="#9399b2", fontsize=7)
+        ax.tick_params(colors="#585b70", labelsize=6)
+        ax.xaxis.pane.fill = False
+        ax.yaxis.pane.fill = False
+        ax.zaxis.pane.fill = False
+        for pane in (ax.xaxis.pane, ax.yaxis.pane, ax.zaxis.pane):
+            pane.set_edgecolor("#45475a")
+        
+        # Restore view orientation
+        ax.view_init(elev=elev, azim=azim)
+    
+        # Draw a simple ground grid around the character's projection
+        root_pos = pts[0]
+        grid_size = 2.0
+        grid_steps = 5
+        x_grid = np.linspace(root_pos[0] - grid_size, root_pos[0] + grid_size, grid_steps)
+        y_grid = np.linspace(root_pos[1] - grid_size, root_pos[1] + grid_size, grid_steps)
+        for x in x_grid:
+            ax.plot([x, x], [y_grid[0], y_grid[-1]], [0, 0], color="#313244", linewidth=0.5, alpha=0.5)
+        for y in y_grid:
+            ax.plot([x_grid[0], x_grid[-1]], [y, y], [0, 0], color="#313244", linewidth=0.5, alpha=0.5)
+    
+        # Scatter joints
+        ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2],
+                   c="#89b4fa", s=25, depthshade=False, zorder=5)
+    
+        # Draw bones if skeleton matches
+        if J == len(_LAFAN_PARENTS):
+            for j, parent in enumerate(_LAFAN_PARENTS):
+                if parent < 0:
+                    continue
+                p0, p1 = pts[parent], pts[j]
+                ax.plot([p0[0], p1[0]], [p0[1], p1[1]], [p0[2], p1[2]],
+                        color="#a6e3a1", linewidth=2.0, alpha=0.9)
+    
+        # Camera following: Center on the root joint (pts[0])
+        # Use a fixed span (1.2m radius) for consistent scaling across sequences
+        span = 1.2
+        ax.set_xlim(root_pos[0] - span, root_pos[0] + span)
+        ax.set_ylim(root_pos[1] - span, root_pos[1] + span)
+        # For Z (height), we show from ground to slightly above head
+        ax.set_zlim(-0.1, 2 * span - 0.1)
+    
+        self._canvas.draw_idle()
+
+    def _on_slider(self, value: int):
+        self._frame = value
+        T = 0 if self._data is None else self._data.shape[0]
+        self._frame_lbl.setText(f"Frame: {value} / {T - 1}")
+        self._draw_frame(value)
+
+    def _toggle_play(self):
+        self._playing = not self._playing
+        self._play_btn.setText("Pause" if self._playing else "Play")
+        if self._playing:
+            self._update_timer_interval()
+            self._play_timer.start()
+        else:
+            self._play_timer.stop()
+
+    def _next_frame(self):
+        if self._data is None:
+            return
+        T = self._data.shape[0]
+        self._frame = (self._frame + 1) % T
+        self._slider.setValue(self._frame)
+
+    def _update_timer_interval(self):
+        interval = max(1, 1000 // self._fps_spin.value())
+        self._play_timer.setInterval(interval)
+
+    def closeEvent(self, event):
+        self._play_timer.stop()
+        super().closeEvent(event)
 
 
 # ---------------------------------------------------------------------------
@@ -388,9 +774,11 @@ class TrainingPlotWidget(QWidget):
 class _TrainingWidgets:
     """Holds references to all training-config widgets for a tab."""
     __slots__ = (
-        "group", "envs", "iters", "ep_len", "headless", "video_enabled",
-        "video_interval", "history_length", "logger", "alpha_init",
-        "foot_tolerance",
+        "alpha_init", "envs", "ep_len", "foot_tolerance", "group",
+        "headless", "history_length", "iters", "logger",
+        "video_enabled", "video_interval",
+        "vram_bar", "vram_lbl", "ram_bar", "ram_lbl", "health_msg",
+        "robot_cb", "algo_cb", "run_btn", "preset_combo"
     )
 
 
@@ -405,6 +793,12 @@ class WorkflowLauncher(QMainWindow):
         self.setStyleSheet(STYLESHEET)
 
         self._process: QProcess | None = None
+        self._gpu_used_mb = 0.0
+        self._gpu_total_mb = 0.0
+        self._pulse_state = False
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.timeout.connect(self._toggle_pulse)
+        self._pulse_timer.start(500)
 
         # ── Central ─────────────────────────────────────────────────────
         central = QWidget()
@@ -476,6 +870,16 @@ class WorkflowLauncher(QMainWindow):
 
         self.statusBar().showMessage("Ready")
 
+        # ── GPU Status Monitoring ──────────────────────────────────────
+        self._gpu_lbl = QLabel("GPU VRAM: -- / -- MB")
+        self._gpu_lbl.setStyleSheet("color: #f9e2af; font-family: 'JetBrains Mono', monospace; font-weight: bold; padding-right: 10px;")
+        self.statusBar().addPermanentWidget(self._gpu_lbl)
+
+        self._gpu_timer = QTimer(self)
+        self._gpu_timer.timeout.connect(self._update_gpu_status)
+        self._gpu_timer.start(2000)
+        self._update_gpu_status()
+
     # ===================================================================
     #  Console helpers
     # ===================================================================
@@ -492,6 +896,260 @@ class WorkflowLauncher(QMainWindow):
 
     def _log_cmd(self, text: str):
         self._log(f"$ {text}", "#f9e2af")
+
+    @Slot()
+    def _update_gpu_status(self):
+        """Fetch and display GPU VRAM usage via nvidia-smi."""
+        try:
+            # query-gpu returns e.g. "8502, 23028"
+            cmd = ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"]
+            output = subprocess.check_output(cmd, encoding="utf-8", stderr=subprocess.DEVNULL).strip()
+            
+            # If multiple GPUs, this might return multiple lines; take the first one for now
+            line = output.splitlines()[0]
+            used, total = map(float, line.split(","))
+            self._gpu_used_mb = used
+            self._gpu_total_mb = total
+            pct = (used / total) * 100
+            
+            # Color code based on usage
+            color = "#f9e2af" # Yellow (Warning-ish)
+            if pct < 50: color = "#a6e3a1" # Green
+            elif pct > 90: color = "#f38ba8" # Red
+            
+            self._gpu_lbl.setStyleSheet(f"color: {color}; font-family: 'JetBrains Mono', monospace; font-weight: bold; padding-right: 10px;")
+            self._gpu_lbl.setText(f"GPU VRAM: {used/1024:.1f} / {total/1024:.1f} GB ({pct:.1f}%)")
+            
+            # Also trigger resource health update for active tab
+            self._update_all_resource_health()
+        except Exception:
+            self._gpu_lbl.setText("GPU VRAM: N/A")
+            self._gpu_lbl.setStyleSheet("color: #6c7086; font-family: 'JetBrains Mono', monospace; font-weight: bold; padding-right: 10px;")
+            self._gpu_used_mb = 0
+            self._gpu_total_mb = 0
+            self._update_all_resource_health()
+
+    @Slot()
+    def _toggle_pulse(self):
+        """Toggle state for pulsing critical warnings."""
+        self._pulse_state = not self._pulse_state
+        self._update_all_resource_health()
+
+    # ===================================================================
+    #  Config Presets (save / load / delete)
+    # ===================================================================
+    def _preset_path(self, name: str) -> Path:
+        return PRESETS_DIR / f"{name}.json"
+
+    def _preset_to_dict(self, tw: _TrainingWidgets) -> dict:
+        return {
+            "envs":           tw.envs.value(),
+            "iters":          tw.iters.value(),
+            "ep_len":         tw.ep_len.value(),
+            "history_length": tw.history_length.value(),
+            "alpha_init":     tw.alpha_init.value(),
+            "foot_tolerance": tw.foot_tolerance.value(),
+            "headless":       tw.headless.isChecked(),
+            "video_enabled":  tw.video_enabled.isChecked(),
+            "video_interval": tw.video_interval.value(),
+            "logger":         tw.logger.currentData(),
+        }
+
+    def _dict_to_tw(self, d: dict, tw: _TrainingWidgets) -> None:
+        if "envs" in d:
+            tw.envs.setValue(d["envs"])
+        if "iters" in d:
+            tw.iters.setValue(d["iters"])
+        if "ep_len" in d:
+            tw.ep_len.setValue(d["ep_len"])
+        if "history_length" in d:
+            tw.history_length.setValue(d["history_length"])
+        if "alpha_init" in d:
+            tw.alpha_init.setValue(d["alpha_init"])
+        if "foot_tolerance" in d:
+            tw.foot_tolerance.setValue(d["foot_tolerance"])
+        if "headless" in d:
+            tw.headless.setChecked(d["headless"])
+        if "video_enabled" in d:
+            tw.video_enabled.setChecked(d["video_enabled"])
+        if "video_interval" in d:
+            tw.video_interval.setValue(d["video_interval"])
+        if "logger" in d:
+            idx = tw.logger.findData(d["logger"])
+            if idx >= 0:
+                tw.logger.setCurrentIndex(idx)
+
+    def _refresh_preset_combo(self, tw: _TrainingWidgets) -> None:
+        tw.preset_combo.blockSignals(True)
+        current = tw.preset_combo.currentText()
+        tw.preset_combo.clear()
+        PRESETS_DIR.mkdir(parents=True, exist_ok=True)
+        for f in sorted(PRESETS_DIR.glob("*.json")):
+            tw.preset_combo.addItem(f.stem)
+        idx = tw.preset_combo.findText(current)
+        if idx >= 0:
+            tw.preset_combo.setCurrentIndex(idx)
+        tw.preset_combo.blockSignals(False)
+
+    def _refresh_all_preset_combos(self) -> None:
+        for tw in [
+            getattr(self, "_lf_training_widgets", None),
+            getattr(self, "_c3d_training_widgets", None),
+        ]:
+            if tw:
+                self._refresh_preset_combo(tw)
+
+    def _save_preset(self, tw: _TrainingWidgets) -> None:
+        name, ok = QInputDialog.getText(
+            self, "Save Preset", "Preset name:",
+            text=tw.preset_combo.currentText() or "my_preset",
+        )
+        if not ok or not name.strip():
+            return
+        name = name.strip().replace(" ", "_")
+        PRESETS_DIR.mkdir(parents=True, exist_ok=True)
+        self._preset_path(name).write_text(
+            json.dumps(self._preset_to_dict(tw), indent=2)
+        )
+        self._refresh_all_preset_combos()
+        # Select the just-saved preset
+        for tw2 in [
+            getattr(self, "_lf_training_widgets", None),
+            getattr(self, "_c3d_training_widgets", None),
+        ]:
+            if tw2:
+                idx = tw2.preset_combo.findText(name)
+                if idx >= 0:
+                    tw2.preset_combo.setCurrentIndex(idx)
+        self._log_info(f"Preset saved: {name}")
+
+    def _load_preset(self, tw: _TrainingWidgets) -> None:
+        name = tw.preset_combo.currentText()
+        if not name:
+            QMessageBox.warning(self, "No preset", "No preset selected.")
+            return
+        path = self._preset_path(name)
+        if not path.exists():
+            QMessageBox.warning(self, "Not found", f"Preset file not found:\n{path}")
+            return
+        try:
+            d = json.loads(path.read_text())
+        except Exception as e:
+            QMessageBox.warning(self, "Load error", f"Could not parse preset:\n{e}")
+            return
+        self._dict_to_tw(d, tw)
+        self._log_info(f"Preset loaded: {name}")
+
+    def _delete_preset(self, tw: _TrainingWidgets) -> None:
+        name = tw.preset_combo.currentText()
+        if not name:
+            return
+        path = self._preset_path(name)
+        if not path.exists():
+            return
+        reply = QMessageBox.question(
+            self, "Delete preset",
+            f"Delete preset '{name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            path.unlink()
+            self._refresh_all_preset_combos()
+            self._log_info(f"Preset deleted: {name}")
+
+    # ===================================================================
+    #  Resource Health
+    # ===================================================================
+    def _update_all_resource_health(self):
+        """Update health for both LAFAN and C3D tabs."""
+        if hasattr(self, "_lf_training_widgets") and self._lf_training_widgets:
+            self._update_resource_health(self._lf_training_widgets)
+        if hasattr(self, "_c3d_training_widgets") and self._c3d_training_widgets:
+            self._update_resource_health(self._c3d_training_widgets)
+
+    def _update_resource_health(self, tw: _TrainingWidgets):
+        """Estimate resource usage and update UI/Run button state."""
+        # Check if slots are initialized
+        if not all(hasattr(tw, s) and getattr(tw, s) for s in ["envs", "headless", "algo_cb", "run_btn"]):
+            return
+
+        envs = tw.envs.value()
+        is_headless = tw.headless.isChecked()
+        algo_suffix = tw.algo_cb.currentData()
+        is_sac = "sac" in str(algo_suffix).lower()
+        history = tw.history_length.value()
+
+        # 1. Estimate VRAM
+        base_vram = VRAM_BASE_HEADLESS if is_headless else VRAM_BASE_GUI
+        sim_vram = envs * VRAM_PER_ENV_SIM
+        if is_sac:
+            # SAC replay buffer: scales with envs and history
+            algo_vram = envs * VRAM_SAC_BUF_PER_ENV_PER_HIST * history
+        else:
+            algo_vram = VRAM_ALGO_PPO
+        est_vram_gb = base_vram + sim_vram + algo_vram
+
+        # 2. Estimate RAM
+        est_ram_gb = RAM_BASE + (envs * RAM_PER_ENV)
+
+        # 3. Get Actual System Info
+        total_vram_gb = self._gpu_total_mb / 1024.0
+        
+        mem = psutil.virtual_memory()
+        total_ram_gb = mem.total / (1024**3)
+
+        # 4. Compute Ratios against TOTAL system capacity
+        vram_ratio = 0
+        if total_vram_gb > 0:
+            vram_ratio = (est_vram_gb / total_vram_gb) * 100
+        
+        ram_ratio = (est_ram_gb / total_ram_gb) * 100
+
+        # 5. Update UI Bars
+        tw.vram_bar.setValue(int(min(100, vram_ratio)))
+        tw.ram_bar.setValue(int(min(100, ram_ratio)))
+        tw.vram_lbl.setText(f"Est. {est_vram_gb:.1f} GB")
+        tw.ram_lbl.setText(f"Est. {est_ram_gb:.1f} GB")
+
+        # 6. Status Logic & Pulsing
+        status = "Optimal configuration."
+        color = "#a6e3a1" # Green
+        can_run = True
+        
+        # Check VRAM primary
+        if vram_ratio > 90 or (est_vram_gb > (total_vram_gb * 0.95) and total_vram_gb > 0):
+            status = "⚠ CRITICAL: Likely to OOM. Reduce Env Count!"
+            color = "#f38ba8" if not self._pulse_state else "#1e1e2e" # Pulsing Red
+            can_run = False
+        elif vram_ratio > 75:
+            status = "⚠ Warning: High VRAM usage. Close other apps."
+            color = "#f9e2af" # Yellow
+        elif ram_ratio > 90 or est_ram_gb > (total_ram_gb * 0.95):
+            status = "⚠ CRITICAL: Insufficient System RAM!"
+            color = "#f38ba8" if not self._pulse_state else "#1e1e2e" # Pulsing Red
+            can_run = False
+            
+        tw.health_msg.setText(status)
+        tw.health_msg.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 11px;")
+        
+        # Style the progress bars based on ratio
+        bar_color = "#a6e3a1"
+        if vram_ratio > 90: bar_color = "#f38ba8"
+        elif vram_ratio > 75: bar_color = "#f9e2af"
+        tw.vram_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {bar_color}; }}")
+        
+        ram_bar_color = "#a6e3a1"
+        if ram_ratio > 90: ram_bar_color = "#f38ba8"
+        elif ram_ratio > 75: ram_bar_color = "#f9e2af"
+        tw.ram_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {ram_bar_color}; }}")
+
+        # 7. Disable Run Button if critical
+        tw.run_btn.setEnabled(can_run)
+        if not can_run:
+            tw.run_btn.setToolTip("Resource check failed: Reduce Env Count or use Headless mode.")
+        else:
+            tw.run_btn.setToolTip("")
 
     # ===================================================================
     #  Process runner (uses QProcess for non-blocking output)
@@ -657,12 +1315,73 @@ class WorkflowLauncher(QMainWindow):
         tw.video_enabled.setChecked(True)
         tw.video_enabled.setToolTip("Enable video recording during training")
         grid.addWidget(tw.video_enabled, row, 5)
+        row += 1
+
+        # ── Row 3: Resource Health (Capacity Bars) ──
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        line.setStyleSheet("background: #45475a;")
+        grid.addWidget(line, row, 0, 1, 6)
+        row += 1
+
+        grid.addWidget(QLabel("VRAM Capacity:"), row, 0)
+        tw.vram_bar = QProgressBar()
+        tw.vram_bar.setRange(0, 100)
+        grid.addWidget(tw.vram_bar, row, 1, 1, 2)
+        tw.vram_lbl = QLabel("Est. -- GB")
+        grid.addWidget(tw.vram_lbl, row, 3)
+
+        grid.addWidget(QLabel("RAM Capacity:"), row, 4)
+        tw.ram_bar = QProgressBar()
+        tw.ram_bar.setRange(0, 100)
+        grid.addWidget(tw.ram_bar, row, 5)
+        tw.ram_lbl = QLabel("Est. -- GB")
+        grid.addWidget(tw.ram_lbl, row, 6)
+        row += 1
+
+        tw.health_msg = QLabel("Calculating resource feasibility...")
+        tw.health_msg.setStyleSheet("font-style: italic; color: #9399b2; font-size: 11px;")
+        grid.addWidget(tw.health_msg, row, 0, 1, 6)
+
+        # Connect signals for auto-update
+        tw.envs.valueChanged.connect(self._update_all_resource_health)
+        tw.headless.stateChanged.connect(self._update_all_resource_health)
+
+        # ── Preset save/load row ──
+        row += 1
+        preset_row = QHBoxLayout()
+        preset_lbl = QLabel("Preset:")
+        preset_lbl.setStyleSheet("color: #9399b2; font-size: 11px;")
+        preset_row.addWidget(preset_lbl)
+        tw.preset_combo = QComboBox()
+        tw.preset_combo.setMinimumWidth(160)
+        tw.preset_combo.setToolTip("Saved training configuration presets")
+        preset_row.addWidget(tw.preset_combo)
+        load_btn = QPushButton("Load")
+        load_btn.setFixedWidth(60)
+        load_btn.setToolTip("Load selected preset into the fields above")
+        load_btn.clicked.connect(lambda: self._load_preset(tw))
+        preset_row.addWidget(load_btn)
+        save_btn = QPushButton("Save…")
+        save_btn.setFixedWidth(60)
+        save_btn.setToolTip("Save current settings as a named preset")
+        save_btn.clicked.connect(lambda: self._save_preset(tw))
+        preset_row.addWidget(save_btn)
+        del_btn = QPushButton("Delete")
+        del_btn.setFixedWidth(60)
+        del_btn.setToolTip("Delete the selected preset")
+        del_btn.clicked.connect(lambda: self._delete_preset(tw))
+        preset_row.addWidget(del_btn)
+        preset_row.addStretch()
+        grid.addLayout(preset_row, row, 0, 1, 7)
+        self._refresh_preset_combo(tw)
 
         tw.group = grp
-        return tw
+        return grp, tw
 
     # ===================================================================
-    #  TAB 1 – LAFAN Retargeting + Tracking
+    #  TAB 1 - LAFAN Retargeting + Tracking
     # ===================================================================
     def _build_lafan_tab(self):
         scroll = QScrollArea()
@@ -674,21 +1393,59 @@ class WorkflowLauncher(QMainWindow):
         # Robot / algo
         grp1, self._lf_robot, self._lf_algo = self._make_robot_algo_group()
         lay.addWidget(grp1)
-
+        
         # Motion selection
         sel_grp = QGroupBox("LAFAN Motion Sequence")
         sel_lay = QVBoxLayout(sel_grp)
         self._lf_list = QListWidget()
-        self._lf_list.setMaximumHeight(200)
+        self._lf_list.setMaximumHeight(180)
+        self._lf_list.currentItemChanged.connect(self._on_lafan_selection_changed)
         sel_lay.addWidget(self._lf_list)
+        lf_btn_row = QHBoxLayout()
         ref_btn = QPushButton("Refresh List")
         ref_btn.clicked.connect(self._refresh_lafan)
-        sel_lay.addWidget(ref_btn)
+        lf_btn_row.addWidget(ref_btn)
+        self._lf_preview_btn = QPushButton("Preview Motion")
+        self._lf_preview_btn.setEnabled(False)
+        self._lf_preview_btn.clicked.connect(self._preview_lafan)
+        lf_btn_row.addWidget(self._lf_preview_btn)
+        lf_btn_row.addStretch()
+        sel_lay.addLayout(lf_btn_row)
+        # Sequence info label
+        self._lf_seq_info = QLabel("Select a sequence to see frame info")
+        self._lf_seq_info.setStyleSheet("color: #9399b2; font-size: 11px; padding: 2px 4px;")
+        sel_lay.addWidget(self._lf_seq_info)
         lay.addWidget(sel_grp)
 
+        # Frame range
+        fr_grp = QGroupBox("Frame Range (applied at convert step)")
+        fr_lay = QHBoxLayout(fr_grp)
+        self._lf_use_range = QCheckBox("Enable frame range")
+        self._lf_use_range.setChecked(False)
+        self._lf_use_range.toggled.connect(self._on_lf_range_toggled)
+        fr_lay.addWidget(self._lf_use_range)
+        fr_lay.addSpacing(12)
+        fr_lay.addWidget(QLabel("Start:"))
+        self._lf_fr_start = QSpinBox()
+        self._lf_fr_start.setRange(0, 999999)
+        self._lf_fr_start.setValue(0)
+        self._lf_fr_start.setEnabled(False)
+        fr_lay.addWidget(self._lf_fr_start)
+        fr_lay.addWidget(QLabel("End:"))
+        self._lf_fr_end = QSpinBox()
+        self._lf_fr_end.setRange(1, 999999)
+        self._lf_fr_end.setValue(500)
+        self._lf_fr_end.setEnabled(False)
+        fr_lay.addWidget(self._lf_fr_end)
+        fr_lay.addStretch()
+        lay.addWidget(fr_grp)
+
         # Training config (expanded)
-        self._lf_tw = self._make_training_group()
-        lay.addWidget(self._lf_tw.group)
+        grp_lf, self._lf_training_widgets = self._make_training_group()
+        self._lf_training_widgets.robot_cb = self._lf_robot
+        self._lf_training_widgets.algo_cb = self._lf_algo
+        # Note: self._lf_algo is also connected in _build_lafan_tab's robot/algo section
+        lay.addWidget(grp_lf)
 
         # Ground range
         gr_grp = QGroupBox("Ground Range")
@@ -707,11 +1464,12 @@ class WorkflowLauncher(QMainWindow):
         lay.addWidget(gr_grp)
 
         # GO
-        run_btn = QPushButton("START LAFAN WORKFLOW")
-        run_btn.setMinimumHeight(48)
-        run_btn.setStyleSheet(BIG_BTN.format(bg="#89b4fa", hover="#74c7ec", press="#b4befe"))
-        run_btn.clicked.connect(self._run_lafan)
-        lay.addWidget(run_btn)
+        self._lf_run_btn = QPushButton("🚀 START LAFAN WORKFLOW")
+        self._lf_run_btn.setMinimumHeight(48)
+        self._lf_run_btn.setStyleSheet(BIG_BTN.format(bg="#a6e3a1", hover="#94e2d5", press="#89dceb"))
+        self._lf_run_btn.clicked.connect(self._run_lafan)
+        self._lf_training_widgets.run_btn = self._lf_run_btn
+        lay.addWidget(self._lf_run_btn)
 
         lay.addStretch()
         scroll.setWidget(w)
@@ -725,9 +1483,56 @@ class WorkflowLauncher(QMainWindow):
         if not tasks:
             self._lf_list.addItem("(no .npy files found)")
         for t in tasks:
-            item = QListWidgetItem(t)
+            npy = DEFAULT_LAFAN_DIR / f"{t}.npy"
+            try:
+                arr = np.load(str(npy), mmap_mode="r")
+                T, J, _ = arr.shape
+                label = f"{t}  [{T} frames, {J} joints, {human_size(npy)}]"
+            except Exception:
+                label = t
+            item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, t)
             self._lf_list.addItem(item)
+
+    def _on_lafan_selection_changed(self, current: QListWidgetItem | None, _prev):
+        if current is None or current.data(Qt.ItemDataRole.UserRole) is None:
+            self._lf_preview_btn.setEnabled(False)
+            self._lf_seq_info.setText("Select a sequence to see frame info")
+            return
+        task = current.data(Qt.ItemDataRole.UserRole)
+        npy = DEFAULT_LAFAN_DIR / f"{task}.npy"
+        self._lf_preview_btn.setEnabled(npy.exists())
+        try:
+            arr = np.load(str(npy), mmap_mode="r")
+            T, J, _ = arr.shape
+            self._lf_seq_info.setText(
+                f"{task}  |  {T} frames  |  {J} joints  |  {human_size(npy)}"
+            )
+            # Auto-populate frame range end to the actual max frames by default
+            self._lf_fr_end.setMaximum(T - 1)
+            self._lf_fr_end.setValue(T - 1)
+        except Exception as e:
+            self._lf_seq_info.setText(f"Could not read file: {e}")
+
+    def _preview_lafan(self):
+        item = self._lf_list.currentItem()
+        if item is None:
+            return
+        task = item.data(Qt.ItemDataRole.UserRole)
+        npy = DEFAULT_LAFAN_DIR / f"{task}.npy"
+        if not npy.exists():
+            QMessageBox.warning(self, "Not Found", f"File not found:\n{npy}")
+            return
+        dlg = MotionPreviewDialog(npy, parent=self)
+        dlg.show()
+
+    def _on_lf_range_toggled(self, checked: bool):
+        self._lf_fr_start.setEnabled(checked)
+        self._lf_fr_end.setEnabled(checked)
+
+    def _on_c3d_range_toggled(self, checked: bool):
+        self._c3d_fr_start.setEnabled(checked)
+        self._c3d_fr_end.setEnabled(checked)
 
     def _run_lafan(self):
         item = self._lf_list.currentItem()
@@ -738,7 +1543,7 @@ class WorkflowLauncher(QMainWindow):
         task = item.data(Qt.ItemDataRole.UserRole)
         dof = self._lf_robot.currentData()
         algo = self._lf_algo.currentData()
-        tw = self._lf_tw
+        tw = self._lf_training_widgets
         envs = tw.envs.value()
         iters = tw.iters.value()
         ep_len = tw.ep_len.value()
@@ -751,29 +1556,82 @@ class WorkflowLauncher(QMainWindow):
         gr_x = self._lf_gr_x.value()
         gr_y = self._lf_gr_y.value()
         stem = f"{dof}dof"
-        exp = f"g1-{stem}-wbt-{algo}"
+        exp = f"g1-{stem}-wbt{algo}"
         retarget_dir = str(PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting")
         lafan_dir = str(DEFAULT_LAFAN_DIR)
-        convert_out = f"{DEFAULT_CONVERT_DIR}/{task}_mj_fps50.npz"
-        converted_file = f"{retarget_dir}/{DEFAULT_CONVERT_DIR}/{task}_mj_fps50.npz"
+        retarget_out = PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting" / DEFAULT_RETARGET_DIR / "lafan" / f"{task}.npz"
+        convert_out = f"{DEFAULT_CONVERT_DIR}/lafan/{task}_mj_fps50.npz"
+        converted_file = f"{retarget_dir}/{DEFAULT_CONVERT_DIR}/lafan/{task}_mj_fps50.npz"
+
+        # ── Overwrite check ───────────────────────────────────────────
+        skip_retarget = False
+        if retarget_out.exists():
+            reply = QMessageBox.question(
+                self, "Retargeted file exists",
+                f"Retargeted output already exists:\n{retarget_out}\n\nOverwrite it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            skip_retarget = (reply == QMessageBox.StandardButton.No)
+
+        # ── Frame range ───────────────────────────────────────────────
+        use_range = self._lf_use_range.isChecked()
+        fr_start = self._lf_fr_start.value()
+        fr_end = self._lf_fr_end.value()
 
         # Build video lines
-        video_lines = []
         if video_on:
             video_lines = [
-                f"    --logger.video.enabled True \\",
+                "    --logger.video.enabled True \\",
                 f"    --logger.video.interval {vid_int} \\",
                 f'    --logger.video.save-dir "{DEFAULT_VIDEO_DIR}/g1_{stem}_lafan_wbt" \\',
             ]
         else:
             video_lines = [
-                f"    --logger.video.enabled False \\",
+                "    --logger.video.enabled False \\",
             ]
 
-        # Build history line (only if > 1)
         history_line = ""
         if history > 1:
             history_line = f"    --observation.groups.actor_obs.history-length {history} \\"
+
+        # ── Retarget step (conditionally skipped) ────────────────────
+        if skip_retarget:
+            retarget_lines = [
+                f'echo "Skipping retargeting — using existing: {retarget_out}"',
+            ]
+        else:
+            retarget_lines = [
+                f'echo "Running retargeting for {task}..."',
+                "python examples/robot_retarget.py \\",
+                f"    --robot-config.robot-dof {dof} \\",
+                f'    --data_path "{lafan_dir}" \\',
+                "    --task-type robot_only \\",
+                f'    --task-name "{task}" \\',
+                "    --data_format lafan \\",
+                f"    --task-config.ground-range {gr_x} {gr_y} \\",
+                f'    --save_dir "{DEFAULT_RETARGET_DIR}/lafan" \\',
+                f"    --retargeter.foot-sticking-tolerance {foot_tol}",
+            ]
+            if use_range:
+                retarget_lines.insert(-1, f"    --line-range {fr_start} {fr_end} \\")
+
+        # ── Convert step (with optional line-range) ───────────────────
+        convert_range_arg = f"    --line-range {fr_start} {fr_end} \\" if use_range else ""
+        range_suffix = f" (frames {fr_start}-{fr_end})" if use_range else ""
+        convert_lines = [
+            f'echo "Converting to MuJoCo format{range_suffix}..."',
+            "python data_conversion/convert_data_format_mj.py \\",
+            f"    --robot-config.robot-dof {dof} \\",
+            f'    --input_file "./{DEFAULT_RETARGET_DIR}/lafan/{task}.npz" \\',
+            "    --output_fps 50 \\",
+            f'    --output_name "{convert_out}" \\',
+            "    --data_format lafan \\",
+            '    --object_name "ground" \\',
+        ]
+        if convert_range_arg:
+            convert_lines.append(convert_range_arg)
+        convert_lines.append("    --once")
 
         lines = [
             f'echo "=== LAFAN Workflow: {task} (G1-{stem}) ==="',
@@ -784,34 +1642,17 @@ class WorkflowLauncher(QMainWindow):
             f'cd "{retarget_dir}"',
             "",
             "# ── Step 2: Retarget ──",
-            f'echo "Running retargeting for {task}..."',
-            f"python examples/robot_retarget.py \\",
-            f"    --robot-config.robot-dof {dof} \\",
-            f'    --data_path "{lafan_dir}" \\',
-            f"    --task-type robot_only \\",
-            f'    --task-name "{task}" \\',
-            f"    --data_format lafan \\",
-            f"    --task-config.ground-range {gr_x} {gr_y} \\",
-            f'    --save_dir "{DEFAULT_RETARGET_DIR}" \\',
-            f"    --retargeter.foot-sticking-tolerance {foot_tol}",
+            *retarget_lines,
             "",
             "# ── Step 3: Convert ──",
-            f'echo "Converting to MuJoCo format..."',
-            f"python data_conversion/convert_data_format_mj.py \\",
-            f"    --robot-config.robot-dof {dof} \\",
-            f'    --input_file "./{DEFAULT_RETARGET_DIR}/{task}.npz" \\',
-            f"    --output_fps 50 \\",
-            f'    --output_name "{convert_out}" \\',
-            f"    --data_format lafan \\",
-            f'    --object_name "ground" \\',
-            f"    --once",
+            *convert_lines,
             "",
             "# ── Step 4: IsaacSim env ──",
             f'cd "{PROJECT_ROOT}"',
             "unset CONDA_ENV_NAME",
             f'source "{PROJECT_ROOT}/scripts/source_isaacsim_setup.sh"',
             f'HOLOSOMA_DEPS_DIR="${{HOLOSOMA_DEPS_DIR:-$HOME/.holosoma_deps}}"',
-            f'pip install -e "{PROJECT_ROOT}/src/holosoma[unitree,booster]" --quiet',
+            f'pip install -e "{PROJECT_ROOT}/src/holosoma" --quiet',
             'if ! python -c "import isaaclab" 2>/dev/null; then',
             '    pip install "setuptools<81" --quiet',
             "    echo 'setuptools<81' > /tmp/hs-build-constraints.txt",
@@ -822,7 +1663,7 @@ class WorkflowLauncher(QMainWindow):
             "",
             "# ── Step 5: Train ──",
             f'echo "Starting training ({exp})..."',
-            f"PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python src/holosoma/holosoma/train_agent.py \\",
+            "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python src/holosoma/holosoma/train_agent.py \\",
             f"    exp:{exp} \\",
             f"    logger:{logger} \\",
             f"    --training.headless {headless} \\",
@@ -843,10 +1684,11 @@ class WorkflowLauncher(QMainWindow):
         ]
 
         self._log_info(f"Starting LAFAN workflow: {task} | {exp} | envs={envs} iters={iters}")
+        self._plot_widget.set_target_iters(iters)
         self._run_script(lines, start_plot=True)
 
     # ===================================================================
-    #  TAB 2 – C3D Retargeting + Tracking
+    #  TAB 2 - C3D Retargeting + Tracking
     # ===================================================================
     def _build_c3d_tab(self):
         scroll = QScrollArea()
@@ -857,7 +1699,7 @@ class WorkflowLauncher(QMainWindow):
 
         grp1, self._c3d_robot, self._c3d_algo = self._make_robot_algo_group()
         lay.addWidget(grp1)
-
+        
         # C3D file
         file_grp = QGroupBox("C3D Input File")
         file_lay = QVBoxLayout(file_grp)
@@ -888,20 +1730,44 @@ class WorkflowLauncher(QMainWindow):
         mm_lay.addWidget(mm_btn)
         lay.addWidget(mm_grp)
 
-        # Training config (expanded) – C3D defaults
-        self._c3d_tw = self._make_training_group()
-        self._c3d_tw.envs.setValue(2048)
-        self._c3d_tw.ep_len.setValue(10.0)
-        self._c3d_tw.video_interval.setValue(10)
-        self._c3d_tw.history_length.setValue(4)
-        lay.addWidget(self._c3d_tw.group)
+        # Frame range
+        fr_grp = QGroupBox("Frame Range (applied at convert step)")
+        fr_lay = QHBoxLayout(fr_grp)
+        self._c3d_use_range = QCheckBox("Enable frame range")
+        self._c3d_use_range.setChecked(True)  # C3D default on (script used 100-500)
+        self._c3d_use_range.toggled.connect(self._on_c3d_range_toggled)
+        fr_lay.addWidget(self._c3d_use_range)
+        fr_lay.addSpacing(12)
+        fr_lay.addWidget(QLabel("Start:"))
+        self._c3d_fr_start = QSpinBox()
+        self._c3d_fr_start.setRange(0, 999999)
+        self._c3d_fr_start.setValue(100)
+        fr_lay.addWidget(self._c3d_fr_start)
+        fr_lay.addWidget(QLabel("End:"))
+        self._c3d_fr_end = QSpinBox()
+        self._c3d_fr_end.setRange(1, 999999)
+        self._c3d_fr_end.setValue(500)
+        fr_lay.addWidget(self._c3d_fr_end)
+        fr_lay.addStretch()
+        lay.addWidget(fr_grp)
+
+        # Training config (expanded) - C3D defaults
+        grp_c3d, self._c3d_training_widgets = self._make_training_group()
+        self._c3d_training_widgets.robot_cb = self._c3d_robot
+        self._c3d_training_widgets.algo_cb = self._c3d_algo
+        self._c3d_training_widgets.envs.setValue(2048)
+        self._c3d_training_widgets.ep_len.setValue(10.0)
+        self._c3d_training_widgets.video_interval.setValue(10)
+        self._c3d_training_widgets.history_length.setValue(4)
+        lay.addWidget(grp_c3d)
 
         # GO
-        run_btn = QPushButton("START C3D WORKFLOW")
-        run_btn.setMinimumHeight(48)
-        run_btn.setStyleSheet(BIG_BTN.format(bg="#89b4fa", hover="#74c7ec", press="#b4befe"))
-        run_btn.clicked.connect(self._run_c3d)
-        lay.addWidget(run_btn)
+        self._c3d_run_btn = QPushButton("🚀 START C3D WORKFLOW")
+        self._c3d_run_btn.setMinimumHeight(48)
+        self._c3d_run_btn.setStyleSheet(BIG_BTN.format(bg="#a6e3a1", hover="#94e2d5", press="#89dceb"))
+        self._c3d_run_btn.clicked.connect(self._run_c3d)
+        self._c3d_training_widgets.run_btn = self._c3d_run_btn
+        lay.addWidget(self._c3d_run_btn)
 
         lay.addStretch()
         scroll.setWidget(w)
@@ -943,7 +1809,7 @@ class WorkflowLauncher(QMainWindow):
         task = Path(c3d_path).stem
         dof = self._c3d_robot.currentData()
         algo = self._c3d_algo.currentData()
-        tw = self._c3d_tw
+        tw = self._c3d_training_widgets
         envs = tw.envs.value()
         iters = tw.iters.value()
         ep_len = tw.ep_len.value()
@@ -953,28 +1819,97 @@ class WorkflowLauncher(QMainWindow):
         history = tw.history_length.value()
         logger = tw.logger.currentData()
         stem = f"{dof}dof"
-        exp = f"g1-{stem}-wbt-{algo}"
+        # algo is the exp suffix (e.g. "-fast-sac" or "" for PPO base)
+        exp = f"g1-{stem}-wbt{algo}"
         retarget_dir = str(PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting")
         c3d_data_dir = str(DEFAULT_C3D_DIR)
         marker_map = self._c3d_marker_map.text().strip()
-        convert_out = f"{DEFAULT_CONVERT_DIR}/{task}_mj_fps50.npz"
-        converted_file = f"{retarget_dir}/{DEFAULT_CONVERT_DIR}/{task}_mj_fps50.npz"
+        convert_out = f"{DEFAULT_CONVERT_DIR}/c3d/{task}_mj_fps50.npz"
+        converted_file = f"{retarget_dir}/{DEFAULT_CONVERT_DIR}/c3d/{task}_mj_fps50.npz"
+
+        # Overwrite check for retarget output
+        retarget_out = (
+            PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting"
+            / DEFAULT_RETARGET_DIR / "c3d" / f"{task}.npz"
+        )
+        skip_retarget = False
+        if retarget_out.exists():
+            reply = QMessageBox.question(
+                self, "Retargeted file exists",
+                f"Retargeted output already exists:\n{retarget_out}\n\nOverwrite it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            skip_retarget = (reply == QMessageBox.StandardButton.No)
+
+        # Frame range
+        use_range = self._c3d_use_range.isChecked()
+        fr_start = self._c3d_fr_start.value()
+        fr_end = self._c3d_fr_end.value()
 
         video_lines = []
         if video_on:
             video_lines = [
-                f"    --logger.video.enabled True \\",
+                "    --logger.video.enabled True \\",
                 f"    --logger.video.interval {vid_int} \\",
                 f'    --logger.video.save-dir "{DEFAULT_VIDEO_DIR}/g1_{stem}_c3d_wbt" \\',
             ]
         else:
             video_lines = [
-                f"    --logger.video.enabled False \\",
+                "    --logger.video.enabled False \\",
             ]
 
         history_line = ""
         if history > 1:
             history_line = f"    --observation.groups.actor_obs.history-length {history} \\"
+
+        range_suffix = f" (frames {fr_start}-{fr_end})" if use_range else ""
+        convert_range_arg = f"    --line-range {fr_start} {fr_end} \\" if use_range else ""
+
+        retarget_lines: list[str] = []
+        if skip_retarget:
+            retarget_lines = [
+                f'echo "Skipping retargeting (using existing: {retarget_out})"',
+            ]
+        else:
+            retarget_lines = [
+                "# ── Step 2: Convert C3D -> NPZ ──",
+                'echo "Converting C3D to NPZ..."',
+                "python3 data_utils/prep_c3d_for_rt.py \\",
+                f'    --input "{c3d_path}" \\',
+                f'    --output "{c3d_data_dir}/{task}.npz" \\',
+                "    --marker-set custom \\",
+                f'    --marker-map "{marker_map}" \\',
+                "    --downsample-to 100 \\",
+                "    --lowpass-hz 4.0",
+                "",
+                "# ── Step 3: Retarget ──",
+                'echo "Retargeting..."',
+                "python examples/robot_retarget.py \\",
+                f"    --robot-config.robot-dof {dof} \\",
+                f'    --data_path "{c3d_data_dir}" \\',
+                "    --task-type robot_only \\",
+                f'    --task-name "{task}" \\',
+                "    --data_format c3d \\",
+                f'    --save_dir "{DEFAULT_RETARGET_DIR}/c3d"',
+            ]
+            if use_range:
+                retarget_lines.insert(-1, f"    --line-range {fr_start} {fr_end} \\")
+
+        convert_lines = [
+            "# ── Step 4: Convert ──",
+            f'echo "Converting to MuJoCo format{range_suffix}..."',
+            "python data_conversion/convert_data_format_mj.py \\",
+            f"    --robot-config.robot-dof {dof} \\",
+            f'    --input_file "{DEFAULT_RETARGET_DIR}/c3d/{task}.npz" \\',
+            "    --output_fps 50 \\",
+            f'    --output_name "{convert_out}" \\',
+            "    --data_format c3d \\",
+            '    --object_name "ground" \\',
+        ]
+        if convert_range_arg:
+            convert_lines.append(convert_range_arg)
+        convert_lines.append("    --once")
 
         lines = [
             f'echo "=== C3D Workflow: {task} (G1-{stem}) ==="',
@@ -987,44 +1922,17 @@ class WorkflowLauncher(QMainWindow):
             "# Check ezc3d",
             'if ! python3 -c "import ezc3d" 2>/dev/null; then pip install ezc3d --quiet; fi',
             "",
-            "# ── Step 2: Convert C3D -> NPZ ──",
-            f'echo "Converting C3D to NPZ..."',
-            f"python3 data_utils/prep_c3d_for_rt.py \\",
-            f'    --input "{c3d_path}" \\',
-            f'    --output "{c3d_data_dir}/{task}.npz" \\',
-            f"    --marker-set custom \\",
-            f'    --marker-map "{marker_map}" \\',
-            f"    --downsample-to 100 \\",
-            f"    --lowpass-hz 4.0",
-            "",
-            "# ── Step 3: Retarget ──",
-            f'echo "Retargeting..."',
-            f"python examples/robot_retarget.py \\",
-            f"    --robot-config.robot-dof {dof} \\",
-            f'    --data_path "{c3d_data_dir}" \\',
-            f"    --task-type robot_only \\",
-            f'    --task-name "{task}" \\',
-            f"    --data_format c3d \\",
-            f'    --save_dir "{DEFAULT_RETARGET_DIR}/c3d"',
-            "",
-            "# ── Step 4: Convert ──",
-            f'echo "Converting to MuJoCo format..."',
-            f"python data_conversion/convert_data_format_mj.py \\",
-            f"    --robot-config.robot-dof {dof} \\",
-            f'    --input_file "{DEFAULT_RETARGET_DIR}/c3d/{task}.npz" \\',
-            f"    --output_fps 50 \\",
-            f'    --output_name "{convert_out}" \\',
-            f"    --data_format c3d \\",
-            f'    --object_name "ground" \\',
-            f"    --line-range 100 500 \\",
-            f"    --once",
+        ]
+        lines.extend(retarget_lines)
+        lines.extend(convert_lines)
+        lines += [
             "",
             "# ── Step 5: IsaacSim env ──",
             f'cd "{PROJECT_ROOT}"',
             "unset CONDA_ENV_NAME",
             f'source "{PROJECT_ROOT}/scripts/source_isaacsim_setup.sh"',
             f'HOLOSOMA_DEPS_DIR="${{HOLOSOMA_DEPS_DIR:-$HOME/.holosoma_deps}}"',
-            f'pip install -e "{PROJECT_ROOT}/src/holosoma[unitree,booster]" --quiet',
+            f'pip install -e "{PROJECT_ROOT}/src/holosoma" --quiet',
             'if ! python -c "import isaaclab" 2>/dev/null; then',
             '    pip install "setuptools<81" --quiet',
             "    echo 'setuptools<81' > /tmp/hs-build-constraints.txt",
@@ -1035,7 +1943,7 @@ class WorkflowLauncher(QMainWindow):
             "",
             "# ── Step 6: Train ──",
             f'echo "Starting training ({exp})..."',
-            f"PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python src/holosoma/holosoma/train_agent.py \\",
+            "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python src/holosoma/holosoma/train_agent.py \\",
             f"    exp:{exp} \\",
             f"    logger:{logger} \\",
             f'    --logger.base-dir "{DEFAULT_LOGS_DIR.relative_to(PROJECT_ROOT)}" \\',
@@ -1056,10 +1964,11 @@ class WorkflowLauncher(QMainWindow):
         ]
 
         self._log_info(f"Starting C3D workflow: {task} | {exp} | envs={envs} iters={iters}")
+        self._plot_widget.set_target_iters(iters)
         self._run_script(lines, start_plot=True)
 
     # ===================================================================
-    #  TAB 3 – Inference
+    #  TAB 3 - Inference
     # ===================================================================
     def _build_inference_tab(self):
         scroll = QScrollArea()
@@ -1179,18 +2088,18 @@ class WorkflowLauncher(QMainWindow):
         headless = "True" if self._sim_headless.isChecked() else "False"
 
         lines = [
-            f'echo "=== Simulation Inference ==="',
+            'echo "=== Simulation Inference ==="',
             f'echo "Checkpoint: {ckpt}"',
             "",
             "unset CONDA_ENV_NAME",
             f'source "{PROJECT_ROOT}/scripts/source_isaacsim_setup.sh"',
-            f'pip install -e "{PROJECT_ROOT}/src/holosoma[unitree,booster]" --quiet',
+            f'pip install -e "{PROJECT_ROOT}/src/holosoma" --quiet',
             "",
             f'cd "{PROJECT_ROOT}"',
-            f"python src/holosoma/holosoma/eval_agent.py \\",
+            "python src/holosoma/holosoma/eval_agent.py \\",
             f'    --checkpoint "{ckpt}" \\',
-            f"    --training.export-onnx True \\",
-            f"    --training.num-envs 1 \\",
+            "    --training.export-onnx True \\",
+            "    --training.num-envs 1 \\",
             f"    --training.headless {headless}",
             "",
             'echo "=== Simulation inference complete! ==="',
@@ -1220,7 +2129,7 @@ class WorkflowLauncher(QMainWindow):
             return
 
         lines = [
-            f'echo "=== Hardware Inference ==="',
+            'echo "=== Hardware Inference ==="',
             f'echo "ONNX: {onnx_path}"',
             "",
             "unset CONDA_ENV_NAME",
@@ -1228,10 +2137,10 @@ class WorkflowLauncher(QMainWindow):
             f'pip install -e "{PROJECT_ROOT}/src/holosoma_inference" --quiet',
             "",
             f'cd "{PROJECT_ROOT}"',
-            f"python src/holosoma_inference/holosoma_inference/run_policy.py \\",
-            f"    inference:g1-23dof-wbt \\",
+            "python src/holosoma_inference/holosoma_inference/run_policy.py \\",
+            "    inference:g1-23dof-wbt \\",
             f'    --task.model-path="{onnx_path}" \\',
-            f"    --observation.groups.actor_obs.history-length=4",
+            "    --observation.groups.actor_obs.history-length=4",
             "",
             'echo "=== Hardware inference complete! ==="',
         ]
@@ -1239,7 +2148,7 @@ class WorkflowLauncher(QMainWindow):
         self._run_script(lines)
 
     # ===================================================================
-    #  TAB 4 – Browse Files
+    #  TAB 4 - Browse Files
     # ===================================================================
     def _build_files_tab(self):
         scroll = QScrollArea()
@@ -1302,7 +2211,7 @@ class WorkflowLauncher(QMainWindow):
             self._files_ckpt.addItem("(no checkpoints found)")
 
     # ===================================================================
-    #  TAB 5 – Settings / Configuration
+    #  TAB 5 - Settings / Configuration
     # ===================================================================
     def _build_settings_tab(self):
         scroll = QScrollArea()
@@ -1405,9 +2314,36 @@ class WorkflowLauncher(QMainWindow):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+def _apply_dark_palette(app: QApplication) -> None:
+    """Apply a dark QPalette so native widgets (QMessageBox, tooltips) match the theme."""
+    pal = QPalette()
+    # Window / panel backgrounds
+    pal.setColor(QPalette.ColorRole.Window,          QColor("#1e1e2e"))
+    pal.setColor(QPalette.ColorRole.WindowText,      QColor("#cdd6f4"))
+    pal.setColor(QPalette.ColorRole.Base,            QColor("#313244"))
+    pal.setColor(QPalette.ColorRole.AlternateBase,   QColor("#45475a"))
+    pal.setColor(QPalette.ColorRole.ToolTipBase,     QColor("#313244"))
+    pal.setColor(QPalette.ColorRole.ToolTipText,     QColor("#cdd6f4"))
+    # Text
+    pal.setColor(QPalette.ColorRole.Text,            QColor("#cdd6f4"))
+    pal.setColor(QPalette.ColorRole.BrightText,      QColor("#f38ba8"))
+    pal.setColor(QPalette.ColorRole.PlaceholderText, QColor("#6c7086"))
+    # Buttons
+    pal.setColor(QPalette.ColorRole.Button,          QColor("#45475a"))
+    pal.setColor(QPalette.ColorRole.ButtonText,      QColor("#cdd6f4"))
+    # Highlight (selection)
+    pal.setColor(QPalette.ColorRole.Highlight,       QColor("#89b4fa"))
+    pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#1e1e2e"))
+    # Disabled text
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text,       QColor("#6c7086"))
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#6c7086"))
+    app.setPalette(pal)
+
+
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    _apply_dark_palette(app)
     win = WorkflowLauncher()
     win.show()
     sys.exit(app.exec())

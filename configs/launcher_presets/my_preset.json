@@ -1,0 +1,12 @@
+{
+  "envs": 2000,
+  "iters": 50000,
+  "ep_len": 6.0,
+  "history_length": 4,
+  "alpha_init": 0.01,
+  "foot_tolerance": 0.02,
+  "headless": true,
+  "video_enabled": true,
+  "video_interval": 5,
+  "logger": "wandb-offline"
+}

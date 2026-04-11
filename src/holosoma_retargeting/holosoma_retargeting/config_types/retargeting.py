@@ -64,6 +64,9 @@ class RetargetingConfig:
     """Retargeter configuration (nested - can override q_a_init_idx, activate_joint_limits, etc.
     via --retargeter.q-a-init-idx)."""
 
+    line_range: tuple[int, int] | None = None
+    """Line range (start, end) for loading data (both inclusive)."""
+
 
 @dataclass
 class ParallelRetargetingConfig(RetargetingConfig):

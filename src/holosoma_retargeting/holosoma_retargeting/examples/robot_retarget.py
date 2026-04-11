@@ -690,6 +690,27 @@ def main(cfg: RetargetingConfig) -> None:
         augmentation_translation=_AUGMENTATION_TRANSLATION,
     )
 
+    # Slice motion data if line_range is provided
+    if cfg.line_range is not None:
+        start, end = cfg.line_range
+        total_frames = human_joints.shape[0] - 1
+        if not (0 <= start <= end <= total_frames):
+            logger.warning(
+                "line_range [%d, %d] out of bounds (total frames: %d). Clipping.",
+                start,
+                end,
+                total_frames + 1,
+            )
+            start = max(0, min(start, total_frames))
+            end = max(start, min(end, total_frames))
+
+        human_joints = human_joints[start : end + 1]
+        object_poses = object_poses[start : end + 1]
+        q_nominal = q_nominal[start : end + 1] if q_nominal is not None else None
+        # Also need to slice object_poses_augmented if it was already created
+        object_poses_augmented = object_poses_augmented[start : end + 1]
+        logger.info("Sliced motion data to frames [%d, %d]", start, end)
+
     # Extract foot sticking sequences
     foot_sticking_sequences = extract_foot_sticking_sequence_velocity(human_joints, retargeter.demo_joints, toe_names)
 

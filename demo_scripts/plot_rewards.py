@@ -1,5 +1,9 @@
 import argparse
 import os
+import warnings
+# Suppress Matplotlib Axes3D warning
+warnings.filterwarnings("ignore", message=".*Unable to import Axes3D.*")
+
 import matplotlib.pyplot as plt
 from packaging import version
 import tensorboard as tb
