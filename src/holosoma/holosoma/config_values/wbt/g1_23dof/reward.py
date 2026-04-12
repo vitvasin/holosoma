@@ -52,9 +52,8 @@ g1_23dof_wbt_reward = RewardManagerCfg(
             params={
                 "threshold": 1.0,
                 "undesired_contacts_body_names": (
-                    "^(?!left_foot_contact_point$)(?!right_foot_contact_point$)"
-                    "(?!left_wrist_yaw_link$)(?!right_wrist_yaw_link$)"
-                    "(?!left_ankle_roll_link$)(?!right_ankle_roll_link$).+$"
+                    "^(?!left_ankle_roll.*)(?!right_ankle_roll.*)"
+                    "(?!left_wrist_roll_rubber_hand$)(?!right_wrist_roll_rubber_hand$).+$"
                 ),
             },
             weight=-0.1,
