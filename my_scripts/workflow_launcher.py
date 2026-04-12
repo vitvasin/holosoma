@@ -100,6 +100,49 @@ DEFAULT_RETARGET_DIR = "demo_results/g1/robot_only"
 DEFAULT_CONVERT_DIR = "converted_res/robot_only"
 DEFAULT_VIDEO_DIR = "logs/videos"
 PRESETS_DIR = PROJECT_ROOT / "configs" / "launcher_presets"
+LAUNCHER_CONFIG_PATH = Path.home() / ".config" / "holosoma_launcher" / "config.json"
+
+# Default values stored separately so _reset_dir_config can restore them
+_DEFAULT_LAFAN_DIR = DEFAULT_LAFAN_DIR
+_DEFAULT_C3D_DIR = DEFAULT_C3D_DIR
+_DEFAULT_OMOMO_DIR = DEFAULT_OMOMO_DIR
+_DEFAULT_LOGS_DIR = DEFAULT_LOGS_DIR
+_DEFAULT_RETARGET_DIR = DEFAULT_RETARGET_DIR
+_DEFAULT_CONVERT_DIR = DEFAULT_CONVERT_DIR
+_DEFAULT_VIDEO_DIR = DEFAULT_VIDEO_DIR
+
+
+def _apply_dir_config(cfg: dict) -> None:
+    """Update module-level directory globals from a config dict."""
+    global DEFAULT_LAFAN_DIR, DEFAULT_C3D_DIR, DEFAULT_OMOMO_DIR
+    global DEFAULT_LOGS_DIR, DEFAULT_RETARGET_DIR, DEFAULT_CONVERT_DIR, DEFAULT_VIDEO_DIR
+    if "lafan_dir" in cfg and cfg["lafan_dir"]:
+        DEFAULT_LAFAN_DIR = Path(cfg["lafan_dir"])
+    if "c3d_dir" in cfg and cfg["c3d_dir"]:
+        DEFAULT_C3D_DIR = Path(cfg["c3d_dir"])
+    if "omomo_dir" in cfg and cfg["omomo_dir"]:
+        DEFAULT_OMOMO_DIR = Path(cfg["omomo_dir"])
+    if "logs_dir" in cfg and cfg["logs_dir"]:
+        DEFAULT_LOGS_DIR = Path(cfg["logs_dir"])
+    if "retarget_dir" in cfg and cfg["retarget_dir"]:
+        DEFAULT_RETARGET_DIR = cfg["retarget_dir"]
+    if "convert_dir" in cfg and cfg["convert_dir"]:
+        DEFAULT_CONVERT_DIR = cfg["convert_dir"]
+    if "video_dir" in cfg and cfg["video_dir"]:
+        DEFAULT_VIDEO_DIR = cfg["video_dir"]
+
+
+def _load_launcher_config() -> None:
+    """Load persisted directory config and override module defaults."""
+    if LAUNCHER_CONFIG_PATH.exists():
+        try:
+            with open(LAUNCHER_CONFIG_PATH) as f:
+                _apply_dir_config(json.load(f))
+        except Exception:
+            pass  # silently ignore malformed config
+
+
+_load_launcher_config()
 
 ROBOTS = [("23", "G1-23DOF"), ("29", "G1-29DOF")]
 # Values are the exp: subcommand suffix appended to "g1-{N}dof-wbt".
@@ -2589,64 +2632,77 @@ class WorkflowLauncher(QMainWindow):
         w = QWidget()
         lay = QVBoxLayout(w)
 
+        # ── Editable Directory Configuration ────────────────────────────
         dir_grp = QGroupBox("Directory Configuration")
-        dir_lay = QVBoxLayout(dir_grp)
-        rows = [
-            ("Project Root:", str(PROJECT_ROOT)),
-            ("LAFAN Data:", str(DEFAULT_LAFAN_DIR)),
-            ("C3D Data:", str(DEFAULT_C3D_DIR)),
-            ("Logs Dir:", str(DEFAULT_LOGS_DIR)),
-            ("Retarget Output:", str(PROJECT_ROOT / DEFAULT_RETARGET_DIR)),
-            ("Convert Output:", str(PROJECT_ROOT / DEFAULT_CONVERT_DIR)),
-            ("Video Dir:", str(PROJECT_ROOT / DEFAULT_VIDEO_DIR)),
+        dir_lay = QGridLayout(dir_grp)
+        dir_lay.setColumnStretch(1, 1)
+
+        # (label, instance attr, current value, show browse button)
+        dir_fields = [
+            ("LAFAN Data:",      "_settings_lafan_edit",    str(DEFAULT_LAFAN_DIR),  True),
+            ("C3D Data:",        "_settings_c3d_edit",     str(DEFAULT_C3D_DIR),    True),
+            ("OMOMO Data:",      "_settings_omomo_edit",   str(DEFAULT_OMOMO_DIR),  True),
+            ("Logs Dir:",        "_settings_logs_edit",    str(DEFAULT_LOGS_DIR),   True),
+            ("Retarget Output:", "_settings_retarget_edit",str(DEFAULT_RETARGET_DIR), False),
+            ("Convert Output:",  "_settings_convert_edit", str(DEFAULT_CONVERT_DIR), False),
+            ("Video Dir:",       "_settings_video_edit",   str(DEFAULT_VIDEO_DIR),  False),
         ]
-        for label_text, value in rows:
-            row = QHBoxLayout()
+        for row_idx, (label_text, attr, default, has_browse) in enumerate(dir_fields):
             lbl = QLabel(label_text)
-            lbl.setMinimumWidth(120)
-            row.addWidget(lbl)
-            edit = QLineEdit(value)
-            edit.setReadOnly(True)
-            edit.setStyleSheet("background: #313244; color: #9399b2;")
-            row.addWidget(edit)
-            dir_lay.addLayout(row)
-        dir_lay.addWidget(QLabel(
-            "\nTo customise output paths, set environment variables before launching:\n"
-            "  export RETARGET_OUTPUT_DIR=...\n"
-            "  export CONVERT_OUTPUT_DIR=...\n"
-            "  export LOGS_DIR=...\n"
-            "  export VIDEO_DIR=..."
-        ))
+            lbl.setMinimumWidth(130)
+            dir_lay.addWidget(lbl, row_idx, 0)
+            edit = QLineEdit(default)
+            setattr(self, attr, edit)
+            dir_lay.addWidget(edit, row_idx, 1)
+            if has_browse:
+                btn = QPushButton("Browse…")
+                btn.setFixedWidth(80)
+                btn.clicked.connect(lambda _, e=edit: self._browse_settings_dir(e))
+                dir_lay.addWidget(btn, row_idx, 2)
+
+        note = QLabel(
+            "Project Root: " + str(PROJECT_ROOT) + "\n\n"
+            "Retarget Output and Convert Output are relative to Project Root.\n"
+            "Click Save & Apply to update all tabs immediately."
+        )
+        note.setStyleSheet("color: #9399b2; font-size: 11px;")
+        note.setWordWrap(True)
+        dir_lay.addWidget(note, len(dir_fields), 0, 1, 3)
+
+        btn_row = QHBoxLayout()
+        save_btn = QPushButton("Save & Apply")
+        save_btn.setStyleSheet(
+            "background:#a6e3a1; color:#1e1e2e; font-weight:bold;"
+            "padding:6px 16px; border-radius:4px;"
+        )
+        save_btn.clicked.connect(self._save_dir_config)
+        btn_row.addWidget(save_btn)
+        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn.clicked.connect(self._reset_dir_config)
+        btn_row.addWidget(reset_btn)
+        btn_row.addStretch()
+        dir_lay.addLayout(btn_row, len(dir_fields) + 1, 0, 1, 3)
         lay.addWidget(dir_grp)
 
+        # ── Directory Status (dynamic) ───────────────────────────────────
         check_grp = QGroupBox("Directory Status")
         check_lay = QVBoxLayout(check_grp)
-        dirs_check = [
-            ("LAFAN Data", DEFAULT_LAFAN_DIR),
-            ("C3D Data", DEFAULT_C3D_DIR),
-            ("Logs", DEFAULT_LOGS_DIR),
-            ("Retarget Output", PROJECT_ROOT / DEFAULT_RETARGET_DIR),
-            ("Convert Output", PROJECT_ROOT / DEFAULT_CONVERT_DIR),
-            ("Videos", PROJECT_ROOT / DEFAULT_VIDEO_DIR),
+        self._settings_status_labels: list[tuple[str, QLabel]] = []
+        status_names = [
+            "LAFAN Data", "C3D Data", "OMOMO Data",
+            "Logs", "Retarget Output", "Convert Output", "Videos",
         ]
-        for name, path in dirs_check:
-            exists = path.exists()
-            colour = "#a6e3a1" if exists else "#f38ba8"
-            symbol = "OK" if exists else "MISSING"
-            lbl = QLabel(f"  [{symbol}]  {name}: {path}")
-            lbl.setStyleSheet(f"color: {colour};")
+        for name in status_names:
+            lbl = QLabel()
             check_lay.addWidget(lbl)
+            self._settings_status_labels.append((name, lbl))
         lay.addWidget(check_grp)
+        self._update_dir_status()
 
-        # Dependencies check
+        # ── Python Dependencies ──────────────────────────────────────────
         dep_grp = QGroupBox("Python Dependencies")
         dep_lay = QVBoxLayout(dep_grp)
-        deps = [
-            ("PySide6", True),
-            ("matplotlib", True),
-            ("tbparse (live plots)", HAS_TBPARSE),
-        ]
-        for name, ok in deps:
+        for name, ok in [("PySide6", True), ("matplotlib", True), ("tbparse (live plots)", HAS_TBPARSE)]:
             colour = "#a6e3a1" if ok else "#f9e2af"
             symbol = "OK" if ok else "MISSING"
             lbl = QLabel(f"  [{symbol}]  {name}")
@@ -2659,6 +2715,71 @@ class WorkflowLauncher(QMainWindow):
         lay.addStretch()
         scroll.setWidget(w)
         return scroll
+
+    @Slot()
+    def _browse_settings_dir(self, edit: QLineEdit):
+        start = edit.text().strip() or str(PROJECT_ROOT)
+        chosen = QFileDialog.getExistingDirectory(self, "Select Directory", start)
+        if chosen:
+            edit.setText(chosen)
+
+    @Slot()
+    def _save_dir_config(self):
+        cfg = {
+            "lafan_dir":    self._settings_lafan_edit.text().strip(),
+            "c3d_dir":      self._settings_c3d_edit.text().strip(),
+            "omomo_dir":    self._settings_omomo_edit.text().strip(),
+            "logs_dir":     self._settings_logs_edit.text().strip(),
+            "retarget_dir": self._settings_retarget_edit.text().strip(),
+            "convert_dir":  self._settings_convert_edit.text().strip(),
+            "video_dir":    self._settings_video_edit.text().strip(),
+        }
+        _apply_dir_config(cfg)
+        try:
+            LAUNCHER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(LAUNCHER_CONFIG_PATH, "w") as fh:
+                json.dump(cfg, fh, indent=2)
+        except Exception as exc:
+            self._log(f"[Settings] Could not save config: {exc}", "#f38ba8")
+
+        # Sync OMOMO tab's data-dir widget
+        self._omomo_data_dir.setText(str(DEFAULT_OMOMO_DIR))
+
+        # Refresh all file lists and status
+        self._refresh_lafan()
+        self._refresh_c3d()
+        self._refresh_omomo()
+        self._refresh_files_tab()
+        self._update_dir_status()
+        self.statusBar().showMessage("Directories saved and applied.", 5000)
+        self._log("[Settings] Directories saved and applied.", "#a6e3a1")
+
+    @Slot()
+    def _reset_dir_config(self):
+        self._settings_lafan_edit.setText(str(_DEFAULT_LAFAN_DIR))
+        self._settings_c3d_edit.setText(str(_DEFAULT_C3D_DIR))
+        self._settings_omomo_edit.setText(str(_DEFAULT_OMOMO_DIR))
+        self._settings_logs_edit.setText(str(_DEFAULT_LOGS_DIR))
+        self._settings_retarget_edit.setText(str(_DEFAULT_RETARGET_DIR))
+        self._settings_convert_edit.setText(str(_DEFAULT_CONVERT_DIR))
+        self._settings_video_edit.setText(str(_DEFAULT_VIDEO_DIR))
+
+    def _update_dir_status(self):
+        paths = [
+            DEFAULT_LAFAN_DIR,
+            DEFAULT_C3D_DIR,
+            DEFAULT_OMOMO_DIR,
+            DEFAULT_LOGS_DIR,
+            PROJECT_ROOT / DEFAULT_RETARGET_DIR,
+            PROJECT_ROOT / DEFAULT_CONVERT_DIR,
+            PROJECT_ROOT / DEFAULT_VIDEO_DIR,
+        ]
+        for (name, lbl), path in zip(self._settings_status_labels, paths):
+            exists = Path(path).exists()
+            colour = "#a6e3a1" if exists else "#f38ba8"
+            symbol = "OK" if exists else "MISSING"
+            lbl.setText(f"  [{symbol}]  {name}: {path}")
+            lbl.setStyleSheet(f"color: {colour};")
 
     # ===================================================================
     #  Cleanup
