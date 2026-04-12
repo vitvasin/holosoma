@@ -80,6 +80,9 @@ class DataConversionConfig:
     once: bool = False
     """Run the motion once and exit."""
 
+    headless: bool = False
+    """Skip the MuJoCo viewer window (required on servers without a display)."""
+
     use_omniretarget_data: bool = False
     """Use OmniRetarget data format."""
 

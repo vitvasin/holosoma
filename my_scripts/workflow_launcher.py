@@ -1687,7 +1687,8 @@ class WorkflowLauncher(QMainWindow):
         ]
         if convert_range_arg:
             convert_lines.append(convert_range_arg)
-        convert_lines.append("    --once")
+        convert_lines.append("    --once \\")
+        convert_lines.append("    --headless")
 
         lines = [
             f'echo "=== LAFAN Workflow: {task} (G1-{stem}) ==="',
@@ -1965,7 +1966,8 @@ class WorkflowLauncher(QMainWindow):
         ]
         if convert_range_arg:
             convert_lines.append(convert_range_arg)
-        convert_lines.append("    --once")
+        convert_lines.append("    --once \\")
+        convert_lines.append("    --headless")
 
         lines = [
             f'echo "=== C3D Workflow: {task} (G1-{stem}) ==="',
@@ -2232,7 +2234,8 @@ class WorkflowLauncher(QMainWindow):
         ]
         if convert_range_arg:
             convert_lines.append(convert_range_arg)
-        convert_lines.append("    --once")
+        convert_lines.append("    --once \\")
+        convert_lines.append("    --headless")
 
         lines = [
             f'echo "=== OMOMO Workflow: {task} (G1-{stem}) ==="',
