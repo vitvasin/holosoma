@@ -949,6 +949,15 @@ class WorkflowLauncher(QMainWindow):
     def _log_cmd(self, text: str):
         self._log(f"$ {text}", "#f9e2af")
 
+    @staticmethod
+    def _logs_dir_arg() -> str:
+        """Return the --logger.base-dir value: relative if inside PROJECT_ROOT, else absolute."""
+        p = Path(DEFAULT_LOGS_DIR)
+        try:
+            return str(p.relative_to(PROJECT_ROOT))
+        except ValueError:
+            return str(p)
+
     @Slot()
     def _update_gpu_status(self):
         """Fetch and display GPU VRAM usage via nvidia-smi."""
@@ -1723,6 +1732,7 @@ class WorkflowLauncher(QMainWindow):
             "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python src/holosoma/holosoma/train_agent.py \\",
             f"    exp:{exp} \\",
             f"    logger:{logger} \\",
+            f'    --logger.base-dir "{self._logs_dir_arg()}" \\',
             f"    --training.headless {headless} \\",
             f"    --training.num-envs {envs} \\",
             f"    --algo.config.num-learning-iterations {iters} \\",
@@ -2004,7 +2014,7 @@ class WorkflowLauncher(QMainWindow):
             "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python src/holosoma/holosoma/train_agent.py \\",
             f"    exp:{exp} \\",
             f"    logger:{logger} \\",
-            f'    --logger.base-dir "{DEFAULT_LOGS_DIR.relative_to(PROJECT_ROOT)}" \\',
+            f'    --logger.base-dir "{self._logs_dir_arg()}" \\',
             f"    --training.headless {headless} \\",
             f"    --training.num-envs {envs} \\",
             f"    --algo.config.num-learning-iterations {iters} \\",
@@ -2270,7 +2280,7 @@ class WorkflowLauncher(QMainWindow):
             "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python src/holosoma/holosoma/train_agent.py \\",
             f"    exp:{exp} \\",
             f"    logger:{logger} \\",
-            f'    --logger.base-dir "{DEFAULT_LOGS_DIR.relative_to(PROJECT_ROOT)}" \\',
+            f'    --logger.base-dir "{self._logs_dir_arg()}" \\',
             f"    --training.headless {headless} \\",
             f"    --training.num-envs {envs} \\",
             f"    --algo.config.num-learning-iterations {iters} \\",
