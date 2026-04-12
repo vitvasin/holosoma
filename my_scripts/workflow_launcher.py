@@ -436,8 +436,11 @@ class TrainingPlotWidget(QWidget):
         self._log_dir = log_dir
         self._last_read_size.clear()
         self._eta_samples.clear()
+        self._metric_stats = {}
         self._dir_edit.setText(str(log_dir) if log_dir else "")
         self._draw_empty()
+        if hasattr(self, "_scoreboard") and self._scoreboard is not None:
+            self._scoreboard.clear_stats()
         if HAS_TBPARSE:
             self._timer.start(10_000)  # 10s interval
             self._status_lbl.setText(f"Monitoring: {log_dir or 'latest run'}")
@@ -536,12 +539,32 @@ class TrainingPlotWidget(QWidget):
                 ax.text(0.5, 0.5, "No data yet", ha="center", va="center",
                         color="#585b70", fontsize=9, transform=ax.transAxes)
 
+        # Collect per-metric stats for the scoreboard
+        metric_stats: dict[str, dict] = {}
+        for i, (metric_name, matcher) in enumerate(PLOT_METRICS.items()):
+            matched = [t for t in available_tags if matcher(t)]
+            if matched:
+                subset = df[df["tag"] == matched[0]].sort_values("step")
+                vals = subset["value"].values
+                steps_arr = subset["step"].values
+                if len(vals) > 0:
+                    metric_stats[metric_name] = {
+                        "latest": float(vals[-1]),
+                        "max": float(vals.max()),
+                        "min": float(vals.min()),
+                        "step": int(steps_arr[-1]),
+                    }
+        self._metric_stats = metric_stats
+
         self._canvas.draw_idle()
         n_points = len(df)
         run_name = log_dir.name
 
         # ETA calculation — use mean reward tag as the iteration counter
         eta_str = ""
+        steps_per_sec = 0.0
+        eta_sec = 0.0
+        current_step = 0
         try:
             step_col = df["step"]
             current_step = int(step_col.max())
@@ -571,8 +594,166 @@ class TrainingPlotWidget(QWidget):
 
         self._status_lbl.setText(f"Run: {run_name}  |  {n_points} pts{eta_str}")
 
+        # Push stats to scoreboard if attached
+        if hasattr(self, "_scoreboard") and self._scoreboard is not None:
+            self._scoreboard.update_stats(
+                metric_stats, current_step, self._target_iters,
+                steps_per_sec, eta_sec,
+            )
+
     def set_log_dir(self, path: Path):
         self._apply_new_dir(path)
+
+    def get_latest_stats(self) -> dict[str, dict]:
+        """Return latest/best/step stats per metric from the last refresh, or empty."""
+        return getattr(self, "_metric_stats", {})
+
+
+# ---------------------------------------------------------------------------
+# Training Scoreboard Widget
+# ---------------------------------------------------------------------------
+class TrainingScoreboard(QWidget):
+    """Live scoreboard showing key training stats from TensorBoard logs."""
+
+    _ROW_STYLE = (
+        "background:#313244; border-radius:4px; padding:6px 8px; margin:1px 0;"
+    )
+    _VALUE_STYLE = "font-size:16px; font-weight:bold; font-family:'JetBrains Mono',monospace;"
+    _LABEL_STYLE = "font-size:10px; color:#9399b2;"
+    _SUBLABEL_STYLE = "font-size:9px; color:#6c7086;"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(2)
+
+        header = QLabel("Training Scoreboard")
+        header.setStyleSheet("font-weight:bold; font-size:12px; color:#cdd6f4; padding:2px;")
+        lay.addWidget(header)
+
+        # Progress row
+        self._progress_lbl = QLabel("Iteration: — / —")
+        self._progress_lbl.setStyleSheet("font-size:11px; color:#cdd6f4; padding:2px;")
+        lay.addWidget(self._progress_lbl)
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(0)
+        self._progress_bar.setFixedHeight(14)
+        self._progress_bar.setStyleSheet(
+            "QProgressBar { background:#313244; border:1px solid #45475a; border-radius:4px; text-align:center; font-size:9px; color:#cdd6f4; }"
+            "QProgressBar::chunk { background:#89b4fa; border-radius:3px; }"
+        )
+        lay.addWidget(self._progress_bar)
+
+        # Speed / ETA row
+        self._speed_lbl = QLabel("Speed: —  |  ETA: —")
+        self._speed_lbl.setStyleSheet("font-size:10px; color:#9399b2; padding:2px 2px 4px;")
+        lay.addWidget(self._speed_lbl)
+
+        # Metric cards
+        self._cards: list[dict[str, QLabel]] = []
+        for metric_name, color in zip(PLOT_METRICS, PLOT_COLORS):
+            card = QWidget()
+            card.setStyleSheet(self._ROW_STYLE)
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(6, 4, 6, 4)
+            cl.setSpacing(1)
+
+            name_lbl = QLabel(metric_name)
+            name_lbl.setStyleSheet(f"font-size:10px; font-weight:bold; color:{color};")
+            cl.addWidget(name_lbl)
+
+            val_row = QHBoxLayout()
+            val_row.setSpacing(0)
+            latest_lbl = QLabel("—")
+            latest_lbl.setStyleSheet(f"{self._VALUE_STYLE} color:{color};")
+            val_row.addWidget(latest_lbl)
+            val_row.addStretch()
+            cl.addLayout(val_row)
+
+            sub_row = QHBoxLayout()
+            best_lbl = QLabel("Best: —")
+            best_lbl.setStyleSheet(self._SUBLABEL_STYLE)
+            sub_row.addWidget(best_lbl)
+            sub_row.addStretch()
+            step_lbl = QLabel("Step: —")
+            step_lbl.setStyleSheet(self._SUBLABEL_STYLE)
+            sub_row.addWidget(step_lbl)
+            cl.addLayout(sub_row)
+
+            lay.addWidget(card)
+            self._cards.append({
+                "latest": latest_lbl,
+                "best": best_lbl,
+                "step": step_lbl,
+            })
+
+        lay.addStretch()
+
+    def update_stats(self, stats: dict[str, dict], current_step: int,
+                     target_iters: int, speed: float, eta_sec: float):
+        # Progress
+        if target_iters > 0:
+            pct = min(100, int(100 * current_step / target_iters))
+            self._progress_bar.setValue(pct)
+            self._progress_lbl.setText(
+                f"Iteration: {current_step:,} / {target_iters:,}  ({pct}%)"
+            )
+        else:
+            self._progress_bar.setValue(0)
+            self._progress_lbl.setText(f"Iteration: {current_step:,}")
+
+        # Speed + ETA
+        speed_s = f"{speed:.1f} it/s" if speed > 0 else "—"
+        if eta_sec > 0:
+            if eta_sec < 60:
+                eta_s = f"{eta_sec:.0f}s"
+            elif eta_sec < 3600:
+                eta_s = f"{eta_sec / 60:.0f}m"
+            else:
+                h = int(eta_sec // 3600)
+                m = int((eta_sec % 3600) // 60)
+                eta_s = f"{h}h {m}m"
+        else:
+            eta_s = "—"
+        self._speed_lbl.setText(f"Speed: {speed_s}  |  ETA: {eta_s}")
+
+        # Metric cards
+        for card_dict, metric_name in zip(self._cards, PLOT_METRICS):
+            s = stats.get(metric_name)
+            if s is None:
+                card_dict["latest"].setText("—")
+                card_dict["best"].setText("Best: —")
+                card_dict["step"].setText("Step: —")
+                continue
+
+            fmt = self._fmt_val
+            card_dict["latest"].setText(fmt(s["latest"]))
+            # For error metrics lower is better; for reward/length higher is better
+            is_error = "error" in metric_name.lower()
+            best_val = s["min"] if is_error else s["max"]
+            card_dict["best"].setText(f"Best: {fmt(best_val)}")
+            card_dict["step"].setText(f"Step: {s['step']:,}")
+
+    def clear_stats(self):
+        self._progress_bar.setValue(0)
+        self._progress_lbl.setText("Iteration: — / —")
+        self._speed_lbl.setText("Speed: —  |  ETA: —")
+        for card_dict in self._cards:
+            card_dict["latest"].setText("—")
+            card_dict["best"].setText("Best: —")
+            card_dict["step"].setText("Step: —")
+
+    @staticmethod
+    def _fmt_val(v: float) -> str:
+        if abs(v) >= 1000:
+            return f"{v:,.0f}"
+        if abs(v) >= 10:
+            return f"{v:.1f}"
+        if abs(v) >= 0.01:
+            return f"{v:.3f}"
+        return f"{v:.4e}"
 
 
 # ---------------------------------------------------------------------------
@@ -891,6 +1072,9 @@ class WorkflowLauncher(QMainWindow):
         plot_lay.addWidget(self._plot_widget)
         right_splitter.addWidget(plot_box)
 
+        # Bottom row: console + scoreboard side by side
+        bottom_splitter = QSplitter(Qt.Orientation.Horizontal)
+
         # Console panel
         console_box = QGroupBox("Output Console")
         con_lay = QVBoxLayout(console_box)
@@ -908,7 +1092,24 @@ class WorkflowLauncher(QMainWindow):
         btn_row.addWidget(stop_btn)
         btn_row.addStretch()
         con_lay.addLayout(btn_row)
-        right_splitter.addWidget(console_box)
+        bottom_splitter.addWidget(console_box)
+
+        # Scoreboard panel
+        scoreboard_box = QGroupBox("Scoreboard")
+        sb_lay = QVBoxLayout(scoreboard_box)
+        sb_lay.setContentsMargins(4, 14, 4, 4)
+        self._scoreboard = TrainingScoreboard()
+        sb_lay.addWidget(self._scoreboard)
+        bottom_splitter.addWidget(scoreboard_box)
+
+        bottom_splitter.setSizes([480, 220])
+        bottom_splitter.setStretchFactor(0, 3)
+        bottom_splitter.setStretchFactor(1, 1)
+
+        # Link scoreboard to plot widget
+        self._plot_widget._scoreboard = self._scoreboard
+
+        right_splitter.addWidget(bottom_splitter)
 
         right_splitter.setSizes([420, 350])
         right_splitter.setStretchFactor(0, 3)
@@ -1697,7 +1898,10 @@ class WorkflowLauncher(QMainWindow):
         if convert_range_arg:
             convert_lines.append(convert_range_arg)
         convert_lines.append("    --once \\")
-        convert_lines.append("    --headless")
+        if headless == "True":
+            convert_lines.append("    --headless")
+        else:
+            convert_lines.append("    --no-headless")
 
         lines = [
             f'echo "=== LAFAN Workflow: {task} (G1-{stem}) ==="',
@@ -1977,7 +2181,10 @@ class WorkflowLauncher(QMainWindow):
         if convert_range_arg:
             convert_lines.append(convert_range_arg)
         convert_lines.append("    --once \\")
-        convert_lines.append("    --headless")
+        if headless == "True":
+            convert_lines.append("    --headless")
+        else:
+            convert_lines.append("    --no-headless")
 
         lines = [
             f'echo "=== C3D Workflow: {task} (G1-{stem}) ==="',
@@ -2245,7 +2452,10 @@ class WorkflowLauncher(QMainWindow):
         if convert_range_arg:
             convert_lines.append(convert_range_arg)
         convert_lines.append("    --once \\")
-        convert_lines.append("    --headless")
+        if headless == "True":
+            convert_lines.append("    --headless")
+        else:
+            convert_lines.append("    --no-headless")
 
         lines = [
             f'echo "=== OMOMO Workflow: {task} (G1-{stem}) ==="',
