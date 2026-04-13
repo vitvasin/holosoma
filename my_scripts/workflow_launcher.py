@@ -23,7 +23,10 @@ from __future__ import annotations
 
 import html as _html
 import json
+import os
+import stat
 import sys
+import tempfile
 import time
 import warnings
 import subprocess
@@ -2637,6 +2640,94 @@ class WorkflowLauncher(QMainWindow):
 
         lay.addWidget(cfg_grp)
 
+        # ── MuJoCo Simulation Inference ──
+        mj_grp = QGroupBox("MuJoCo Simulation Inference (Sim-to-Sim)")
+        mj_lay = QVBoxLayout(mj_grp)
+
+        mj_grid = QGridLayout()
+        mj_grid.setColumnStretch(1, 1)
+        mj_grid.setColumnStretch(3, 1)
+
+        mj_row = 0
+        mj_grid.addWidget(QLabel("Sim Robot:"), mj_row, 0)
+        self._mj_sim_robot_cb = QComboBox()
+        self._mj_sim_robot_cb.addItem("G1-23DOF", "g1-23dof")
+        self._mj_sim_robot_cb.addItem("G1-29DOF", "g1-29dof")
+        self._mj_sim_robot_cb.addItem("T1-29DOF", "t1-29dof-waist-wrist")
+        mj_grid.addWidget(self._mj_sim_robot_cb, mj_row, 1)
+
+        mj_grid.addWidget(QLabel("Policy Config:"), mj_row, 2)
+        self._mj_inf_cfg_cb = QComboBox()
+        self._mj_inf_cfg_cb.addItem("G1-23DOF WBT", "g1-23dof-wbt")
+        self._mj_inf_cfg_cb.addItem("G1-29DOF WBT", "g1-29dof-wbt")
+        self._mj_inf_cfg_cb.addItem("G1-29DOF Loco", "g1-29dof-loco")
+        self._mj_inf_cfg_cb.addItem("T1-29DOF Loco", "t1-29dof-loco")
+        mj_grid.addWidget(self._mj_inf_cfg_cb, mj_row, 3)
+
+        mj_row += 1
+        mj_grid.addWidget(QLabel("Interface:"), mj_row, 0)
+        self._mj_interface = QLineEdit("lo")
+        self._mj_interface.setToolTip(
+            "Network interface (task.interface).\n"
+            "Use 'lo' (loopback) when sim and policy run on the same machine."
+        )
+        mj_grid.addWidget(self._mj_interface, mj_row, 1)
+
+        self._mj_use_sim_time = QCheckBox("Use sim time")
+        self._mj_use_sim_time.setChecked(True)
+        self._mj_use_sim_time.setToolTip("--task.use-sim-time — synchronise with MuJoCo's clock")
+        mj_grid.addWidget(self._mj_use_sim_time, mj_row, 2)
+
+        self._mj_use_joystick = QCheckBox("Joystick input")
+        self._mj_use_joystick.setChecked(False)
+        self._mj_use_joystick.setToolTip("Use joystick instead of keyboard for policy control")
+        mj_grid.addWidget(self._mj_use_joystick, mj_row, 3)
+
+        mj_lay.addLayout(mj_grid)
+
+        mj_lay.addWidget(QLabel("ONNX model path:"))
+        self._mj_onnx_list = QListWidget()
+        self._mj_onnx_list.setMaximumHeight(100)
+        mj_lay.addWidget(self._mj_onnx_list)
+
+        mj_onnx_row = QHBoxLayout()
+        mj_ref_onnx = QPushButton("Refresh ONNX")
+        mj_ref_onnx.clicked.connect(self._refresh_mj_onnx)
+        mj_onnx_row.addWidget(mj_ref_onnx)
+        mj_browse_onnx = QPushButton("Browse .onnx ...")
+        mj_browse_onnx.clicked.connect(self._browse_mj_onnx)
+        mj_onnx_row.addWidget(mj_browse_onnx)
+        mj_onnx_row.addStretch()
+        mj_lay.addLayout(mj_onnx_row)
+
+        self._mj_onnx_path = QLineEdit()
+        self._mj_onnx_path.setPlaceholderText("Or enter ONNX path manually")
+        mj_lay.addWidget(self._mj_onnx_path)
+
+        mj_info = QLabel(
+            "Step 1: Launch MuJoCo Sim in a new terminal (gantry will appear).\n"
+            "Step 2: Run Policy in another terminal, then press ] to start.\n"
+            "MuJoCo controls: 8=lower gantry  9=remove gantry  Backspace=reset"
+        )
+        mj_info.setStyleSheet("color: #9399b2; font-size: 11px; padding: 4px;")
+        mj_lay.addWidget(mj_info)
+
+        mj_btn_row = QHBoxLayout()
+        mj_sim_btn = QPushButton("Launch MuJoCo Sim in Terminal")
+        mj_sim_btn.setMinimumHeight(40)
+        mj_sim_btn.setStyleSheet(BIG_BTN.format(bg="#89b4fa", hover="#74c7ec", press="#b4befe"))
+        mj_sim_btn.clicked.connect(self._launch_mujoco_sim_terminal)
+        mj_btn_row.addWidget(mj_sim_btn)
+
+        mj_policy_btn = QPushButton("Run Policy in Terminal")
+        mj_policy_btn.setMinimumHeight(40)
+        mj_policy_btn.setStyleSheet(BIG_BTN.format(bg="#a6e3a1", hover="#94e2d5", press="#89b4fa"))
+        mj_policy_btn.clicked.connect(self._run_mujoco_policy_terminal)
+        mj_btn_row.addWidget(mj_policy_btn)
+        mj_lay.addLayout(mj_btn_row)
+
+        lay.addWidget(mj_grp)
+
         # ── Simulation Inference ──
         sim_grp = QGroupBox("Simulation Inference (IsaacSim) — Export ONNX")
         sim_lay = QVBoxLayout(sim_grp)
@@ -2704,6 +2795,7 @@ class WorkflowLauncher(QMainWindow):
 
         self._refresh_checkpoints()
         self._refresh_onnx()
+        self._refresh_mj_onnx()
         return scroll
 
     def _refresh_checkpoints(self):
@@ -2738,6 +2830,149 @@ class WorkflowLauncher(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Select ONNX", str(PROJECT_ROOT), "ONNX (*.onnx)")
         if path:
             self._hw_onnx_path.setText(path)
+
+    def _refresh_mj_onnx(self):
+        self._mj_onnx_list.clear()
+        files = scan_onnx(DEFAULT_LOGS_DIR)
+        for d in [PROJECT_ROOT / "logs", PROJECT_ROOT / "converted_res",
+                  PROJECT_ROOT / "src/holosoma_inference/holosoma_inference/models"]:
+            if d.is_dir():
+                for f in sorted(d.rglob("*.onnx"), key=lambda p: p.stat().st_mtime, reverse=True):
+                    if f not in files:
+                        files.append(f)
+        if not files:
+            self._mj_onnx_list.addItem("(no ONNX files found)")
+        for p in files:
+            rel = p.relative_to(PROJECT_ROOT) if p.is_relative_to(PROJECT_ROOT) else p
+            item = QListWidgetItem(f"{rel}  ({human_size(p)})")
+            item.setData(Qt.ItemDataRole.UserRole, str(p))
+            self._mj_onnx_list.addItem(item)
+
+    def _browse_mj_onnx(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select ONNX", str(PROJECT_ROOT), "ONNX (*.onnx)")
+        if path:
+            self._mj_onnx_path.setText(path)
+
+    def _open_in_terminal(self, script_lines: list[str], title: str = "Holosoma") -> bool:
+        """Write a temp bash script and open it in an external terminal emulator.
+
+        Returns True if a terminal was launched, False if no emulator was found.
+        """
+        script_body = "#!/usr/bin/env bash\n" + "\n".join(script_lines) + "\nexec bash\n"
+        fd, tmp_path = tempfile.mkstemp(suffix=".sh", prefix="holosoma_", dir="/tmp")
+        with os.fdopen(fd, "w") as fh:
+            fh.write(script_body)
+        Path(tmp_path).chmod(stat.S_IRWXU)
+
+        # Try common terminal emulators in preference order
+        candidates = [
+            ["x-terminal-emulator", "-e", f"bash {tmp_path}"],
+            ["gnome-terminal", "--", "bash", tmp_path],
+            ["xterm", "-title", title, "-e", f"bash {tmp_path}"],
+            ["konsole", "-e", f"bash {tmp_path}"],
+            ["xfce4-terminal", "-e", f"bash {tmp_path}"],
+            ["mate-terminal", "-e", f"bash {tmp_path}"],
+        ]
+        launched = next(
+            (cmd for cmd in candidates if self._try_popen(cmd)),
+            None,
+        )
+        if launched:
+            self._log_info(f"Opened terminal: {launched[0]}")
+            return True
+        QMessageBox.critical(
+            self, "No Terminal Found",
+            "Could not find a terminal emulator.\n"
+            "Install one of: gnome-terminal, xterm, konsole, xfce4-terminal\n\n"
+            f"Script saved to: {tmp_path}"
+        )
+        return False
+
+    @staticmethod
+    def _try_popen(cmd: list[str]) -> bool:
+        try:
+            subprocess.Popen(cmd, cwd=str(PROJECT_ROOT))
+            return True
+        except FileNotFoundError:
+            return False
+
+    def _launch_mujoco_sim_terminal(self):
+        robot = self._mj_sim_robot_cb.currentData()
+        use_joystick = self._mj_use_joystick.isChecked()
+
+        bridge_args = ""
+        if use_joystick:
+            bridge_args = (
+                " \\\n    --simulator.config.bridge.enabled=True"
+                " \\\n    --simulator.config.bridge.use-joystick=True"
+            )
+
+        lines = [
+            f'echo "=== MuJoCo Simulation — robot:{robot} ==="',
+            f'cd "{PROJECT_ROOT}"',
+            f'source "{PROJECT_ROOT}/scripts/source_mujoco_setup.sh"',
+            f'pip install -e "{PROJECT_ROOT}/src/holosoma" --quiet',
+            "",
+            # PYTHONNOUSERSITE=1 as a prefix (not export) so it only applies to
+            # this python process and is never inherited by exec bash below.
+            f"PYTHONNOUSERSITE=1 python src/holosoma/holosoma/run_sim.py robot:{robot}{bridge_args}",
+            "",
+            'echo "=== Simulation exited ==="',
+        ]
+        self._log_info(f"Launching MuJoCo sim in terminal (robot:{robot})")
+        self._open_in_terminal(lines, title=f"MuJoCo Sim — {robot}")
+
+    def _run_mujoco_policy_terminal(self):
+        onnx_path = self._mj_onnx_path.text().strip()
+        if not onnx_path:
+            item = self._mj_onnx_list.currentItem()
+            if item and item.data(Qt.ItemDataRole.UserRole):
+                onnx_path = item.data(Qt.ItemDataRole.UserRole)
+        if not onnx_path:
+            QMessageBox.warning(self, "No ONNX", "Select or enter an ONNX model path.")
+            return
+
+        inf_cfg = self._mj_inf_cfg_cb.currentData()
+        history = self._inf_history.value()
+        rl_rate = self._inf_rl_rate.value()
+        action_scale = self._inf_action_scale.value()
+        interface = self._mj_interface.text().strip() or "lo"
+        use_sim_time = self._mj_use_sim_time.isChecked()
+        use_joystick = self._mj_use_joystick.isChecked()
+        scale_by_effort = "True" if self._inf_scale_by_effort.isChecked() else "False"
+
+        joystick_flag = "--task.use-joystick" if use_joystick else "--task.no-use-joystick"
+
+        lines = [
+            f'echo "=== MuJoCo Policy — inference:{inf_cfg} ==="',
+            f'echo "ONNX: {onnx_path}"',
+            f'cd "{PROJECT_ROOT}"',
+            f'source "{PROJECT_ROOT}/scripts/source_inference_setup.sh"',
+            f'pip install -e "{PROJECT_ROOT}/src/holosoma_inference" --quiet',
+            "",
+            # Build the policy command into a variable so PYTHONNOUSERSITE=1 can
+            # be used as a single-command prefix (never exported, never inherited).
+            "POLICY_CMD=(",
+            "    python3 src/holosoma_inference/holosoma_inference/run_policy.py",
+            f"    inference:{inf_cfg}",
+            f'    --task.model-path="{onnx_path}"',
+            f"    --observation.groups.actor_obs.history-length={history}",
+            f"    --task.rl-rate={rl_rate}",
+            f"    --task.policy-action-scale={action_scale}",
+            f"    --task.action-scales-by-effort-limit-over-p-gain={scale_by_effort}",
+        ]
+        if use_sim_time:
+            lines.append("    --task.use-sim-time")
+        lines += [
+            f"    {joystick_flag}",
+            f"    --task.interface={interface}",
+            ")",
+            'PYTHONNOUSERSITE=1 "${POLICY_CMD[@]}"',
+            "",
+            'echo "=== Policy exited ==="',
+        ]
+        self._log_info(f"Running MuJoCo policy in terminal: inference:{inf_cfg}")
+        self._open_in_terminal(lines, title=f"Policy — {inf_cfg}")
 
     def _run_sim_inference(self):
         item = self._sim_ckpt_list.currentItem()
