@@ -2978,9 +2978,62 @@ class WorkflowLauncher(QMainWindow):
             dep_lay.addWidget(QLabel("    Install: pip install tbparse"))
         lay.addWidget(dep_grp)
 
+        # ── Software Update ──────────────────────────────────────────────
+        update_grp = QGroupBox("Software Update")
+        update_lay = QVBoxLayout(update_grp)
+
+        self._git_info_label = QLabel("Loading git info…")
+        self._git_info_label.setStyleSheet("color: #9399b2; font-size: 11px;")
+        update_lay.addWidget(self._git_info_label)
+        self._refresh_git_info()
+
+        pull_btn = QPushButton("Pull from GitHub")
+        pull_btn.setStyleSheet(
+            "background:#89b4fa; color:#1e1e2e; font-weight:bold;"
+            "padding:6px 16px; border-radius:4px;"
+        )
+        pull_btn.setFixedWidth(160)
+        pull_btn.clicked.connect(self._pull_from_github)
+        update_lay.addWidget(pull_btn)
+        lay.addWidget(update_grp)
+
         lay.addStretch()
         scroll.setWidget(w)
         return scroll
+
+    def _refresh_git_info(self) -> None:
+        """Update the git branch/commit label in the Settings tab."""
+        try:
+            branch = subprocess.run(
+                ["git", "-C", str(PROJECT_ROOT), "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, timeout=5, check=False,
+            ).stdout.strip() or "unknown"
+            commit = subprocess.run(
+                ["git", "-C", str(PROJECT_ROOT), "log", "--oneline", "-1"],
+                capture_output=True, text=True, timeout=5, check=False,
+            ).stdout.strip() or "no commits"
+            self._git_info_label.setText(f"Branch: {branch}    Last commit: {commit}")
+        except Exception as exc:
+            self._git_info_label.setText(f"(git info unavailable: {exc})")
+
+    @Slot()
+    def _pull_from_github(self) -> None:
+        """Run git pull and stream the result to the console."""
+        self._log_info("=== git pull ===")
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(PROJECT_ROOT), "pull"],
+                capture_output=True, text=True, timeout=60, check=False,
+            )
+            for line in (result.stdout + result.stderr).splitlines():
+                self._log(line)
+            if result.returncode == 0:
+                self._log_info("=== git pull completed ===")
+                self._refresh_git_info()
+            else:
+                self._log_err(f"=== git pull failed (exit code {result.returncode}) ===")
+        except Exception as exc:
+            self._log_err(f"=== git pull error: {exc} ===")
 
     @Slot()
     def _browse_settings_dir(self, edit: QLineEdit):
