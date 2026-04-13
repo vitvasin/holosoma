@@ -58,14 +58,14 @@ if "$PYTHON" -m venv "$VENV_DIR" --system-site-packages 2>/dev/null; then
   PYTHON="$VENV_DIR/bin/python"
   echo "Venv         : $VENV_DIR"
   "$PYTHON" -m pip install --quiet --upgrade pip
-  "$PYTHON" -m pip install --quiet 'PySide6>=6.5' 'matplotlib>=3.8' tbparse psutil
+  "$PYTHON" -m pip install --quiet 'PySide6>=6.5' 'matplotlib>=3.8' 'numpy>=1.23' tbparse psutil
 else
   # Last resort: install into user site (may need --break-system-packages on Ubuntu 24)
   PIP_OPTS="--user --quiet"
   if "$PYTHON" -m pip install --user --quiet --dry-run pip 2>&1 | grep -q "externally-managed"; then
     PIP_OPTS="--user --quiet --break-system-packages"
   fi
-  "$PYTHON" -m pip install $PIP_OPTS 'PySide6>=6.5' 'matplotlib>=3.8' tbparse psutil
+  "$PYTHON" -m pip install $PIP_OPTS 'PySide6>=6.5' 'matplotlib>=3.8' 'numpy>=1.23' tbparse psutil
 fi
 
 echo "Dependencies OK."

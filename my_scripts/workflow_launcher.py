@@ -32,6 +32,34 @@ import warnings
 import subprocess
 from pathlib import Path
 
+# --- Ensure correct Python environment ---
+# When run with system Python, re-exec under the launcher venv if available.
+# This ensures venv-installed numpy/matplotlib take precedence over system packages.
+_VENV_PYTHON = Path.home() / ".holosoma_launcher_env" / "bin" / "python"
+if (
+    os.environ.get("_HOLOSOMA_LAUNCHER_REEXEC") != "1"
+    and _VENV_PYTHON.is_file()
+    and sys.prefix == sys.base_prefix  # not already in a venv
+):
+    os.environ["_HOLOSOMA_LAUNCHER_REEXEC"] = "1"
+    os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON)] + sys.argv)
+
+# --- Early dependency check ---
+try:
+    import numpy as _np
+    _np_ver = tuple(int(x) for x in _np.__version__.split(".")[:2])
+    if _np_ver < (1, 23):
+        print(
+            f"ERROR: numpy {_np.__version__} (from {_np.__file__}) is too old.\n"
+            f"       This launcher requires numpy >= 1.23 (for matplotlib).\n"
+            f"\nFix:  pip3 install --user 'numpy>=1.23'\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    del _np, _np_ver
+except ImportError:
+    pass
+
 import psutil
 import numpy as np
 
@@ -2866,12 +2894,12 @@ class WorkflowLauncher(QMainWindow):
 
         # Try common terminal emulators in preference order
         candidates = [
-            ["x-terminal-emulator", "-e", f"bash {tmp_path}"],
+            ["x-terminal-emulator", "-e", "bash", tmp_path],
             ["gnome-terminal", "--", "bash", tmp_path],
-            ["xterm", "-title", title, "-e", f"bash {tmp_path}"],
-            ["konsole", "-e", f"bash {tmp_path}"],
-            ["xfce4-terminal", "-e", f"bash {tmp_path}"],
-            ["mate-terminal", "-e", f"bash {tmp_path}"],
+            ["xterm", "-title", title, "-e", "bash", tmp_path],
+            ["konsole", "-e", "bash", tmp_path],
+            ["xfce4-terminal", "-e", "bash", tmp_path],
+            ["mate-terminal", "-e", "bash", tmp_path],
         ]
         launched = next(
             (cmd for cmd in candidates if self._try_popen(cmd)),
@@ -2913,9 +2941,7 @@ class WorkflowLauncher(QMainWindow):
             f'source "{PROJECT_ROOT}/scripts/source_mujoco_setup.sh"',
             f'pip install -e "{PROJECT_ROOT}/src/holosoma" --quiet',
             "",
-            # PYTHONNOUSERSITE=1 as a prefix (not export) so it only applies to
-            # this python process and is never inherited by exec bash below.
-            f"PYTHONNOUSERSITE=1 python src/holosoma/holosoma/run_sim.py robot:{robot}{bridge_args}",
+            f"python src/holosoma/holosoma/run_sim.py robot:{robot}{bridge_args}",
             "",
             'echo "=== Simulation exited ==="',
         ]
@@ -2943,6 +2969,8 @@ class WorkflowLauncher(QMainWindow):
 
         joystick_flag = "--task.use-joystick" if use_joystick else "--task.no-use-joystick"
 
+        sim_time_flag = "--task.use-sim-time \\" if use_sim_time else ""
+
         lines = [
             f'echo "=== MuJoCo Policy — inference:{inf_cfg} ==="',
             f'echo "ONNX: {onnx_path}"',
@@ -2950,24 +2978,19 @@ class WorkflowLauncher(QMainWindow):
             f'source "{PROJECT_ROOT}/scripts/source_inference_setup.sh"',
             f'pip install -e "{PROJECT_ROOT}/src/holosoma_inference" --quiet',
             "",
-            # Build the policy command into a variable so PYTHONNOUSERSITE=1 can
-            # be used as a single-command prefix (never exported, never inherited).
-            "POLICY_CMD=(",
-            "    python3 src/holosoma_inference/holosoma_inference/run_policy.py",
-            f"    inference:{inf_cfg}",
-            f'    --task.model-path="{onnx_path}"',
-            f"    --observation.groups.actor_obs.history-length={history}",
-            f"    --task.rl-rate={rl_rate}",
-            f"    --task.policy-action-scale={action_scale}",
-            f"    --task.action-scales-by-effort-limit-over-p-gain={scale_by_effort}",
+            "python3 src/holosoma_inference/holosoma_inference/run_policy.py \\",
+            f"    inference:{inf_cfg} \\",
+            f'    --task.model-path="{onnx_path}" \\',
+            f"    --observation.groups.actor_obs.history-length={history} \\",
+            f"    --task.rl-rate={rl_rate} \\",
+            f"    --task.policy-action-scale={action_scale} \\",
+            f"    --task.action-scales-by-effort-limit-over-p-gain={scale_by_effort} \\",
         ]
-        if use_sim_time:
-            lines.append("    --task.use-sim-time")
+        if sim_time_flag:
+            lines.append(f"    {sim_time_flag}")
         lines += [
-            f"    {joystick_flag}",
+            f"    {joystick_flag} \\",
             f"    --task.interface={interface}",
-            ")",
-            'PYTHONNOUSERSITE=1 "${POLICY_CMD[@]}"',
             "",
             'echo "=== Policy exited ==="',
         ]
