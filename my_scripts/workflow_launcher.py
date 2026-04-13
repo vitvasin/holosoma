@@ -21,6 +21,7 @@ Launch:
 
 from __future__ import annotations
 
+import html as _html
 import json
 import sys
 import time
@@ -1133,13 +1134,30 @@ class WorkflowLauncher(QMainWindow):
         self._gpu_timer.start(2000)
         self._update_gpu_status()
 
+        # Buffered console: accumulate (html_fragment) and flush at 100ms to keep the
+        # GUI responsive when the subprocess produces hundreds of lines per second.
+        self._log_buffer: list[str] = []
+        self._log_flush_timer = QTimer(self)
+        self._log_flush_timer.timeout.connect(self._flush_log_buffer)
+        self._log_flush_timer.start(100)
+
     # ===================================================================
     #  Console helpers
     # ===================================================================
+    def _flush_log_buffer(self) -> None:
+        if not self._log_buffer:
+            return
+        html = "".join(self._log_buffer)
+        self._log_buffer.clear()
+        cursor = self._console.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertHtml(html)
+        self._console.setTextCursor(cursor)
+        self._console.ensureCursorVisible()
+
     def _log(self, text: str, color: str = "#a6e3a1"):
-        self._console.setTextColor(QColor(color))
-        self._console.append(text)
-        self._console.moveCursor(QTextCursor.MoveOperation.End)
+        escaped = _html.escape(text)
+        self._log_buffer.append(f'<span style="color:{color};">{escaped}</span><br>')
 
     def _log_info(self, text: str):
         self._log(text, "#89b4fa")
