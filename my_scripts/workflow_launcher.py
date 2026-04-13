@@ -1460,6 +1460,10 @@ class WorkflowLauncher(QMainWindow):
 
     @Slot(int, QProcess.ExitStatus)
     def _on_finished(self, exit_code, status):
+        # Drain any remaining buffered output (e.g. Python tracebacks written just before exit)
+        remaining = self._process.readAllStandardOutput().data().decode(errors="replace")
+        for line in remaining.splitlines():
+            self._log(line)
         if exit_code == 0:
             self._log_info(f"\n=== Process finished (exit code {exit_code}) ===")
         else:
@@ -1706,6 +1710,15 @@ class WorkflowLauncher(QMainWindow):
         fr_lay.addStretch()
         lay.addWidget(fr_grp)
 
+        # MuJoCo replay viewer option
+        self._lf_show_replay = QCheckBox("Show MuJoCo replay viewer after convert step")
+        self._lf_show_replay.setChecked(False)
+        self._lf_show_replay.setToolTip(
+            "When checked, the MuJoCo viewer opens after conversion so you can watch the robot replay.\n"
+            "Leave unchecked on headless servers (no display)."
+        )
+        lay.addWidget(self._lf_show_replay)
+
         # Training config (expanded)
         grp_lf, self._lf_training_widgets = self._make_training_group()
         self._lf_training_widgets.robot_cb = self._lf_robot
@@ -1898,10 +1911,8 @@ class WorkflowLauncher(QMainWindow):
         if convert_range_arg:
             convert_lines.append(convert_range_arg)
         convert_lines.append("    --once \\")
-        if headless == "True":
+        if not self._lf_show_replay.isChecked():
             convert_lines.append("    --headless")
-        else:
-            convert_lines.append("    --no-headless")
 
         lines = [
             f'echo "=== LAFAN Workflow: {task} (G1-{stem}) ==="',
@@ -2021,6 +2032,15 @@ class WorkflowLauncher(QMainWindow):
         fr_lay.addWidget(self._c3d_fr_end)
         fr_lay.addStretch()
         lay.addWidget(fr_grp)
+
+        # MuJoCo replay viewer option
+        self._c3d_show_replay = QCheckBox("Show MuJoCo replay viewer after convert step")
+        self._c3d_show_replay.setChecked(False)
+        self._c3d_show_replay.setToolTip(
+            "When checked, the MuJoCo viewer opens after conversion so you can watch the robot replay.\n"
+            "Leave unchecked on headless servers (no display)."
+        )
+        lay.addWidget(self._c3d_show_replay)
 
         # Training config (expanded) - C3D defaults
         grp_c3d, self._c3d_training_widgets = self._make_training_group()
@@ -2181,10 +2201,8 @@ class WorkflowLauncher(QMainWindow):
         if convert_range_arg:
             convert_lines.append(convert_range_arg)
         convert_lines.append("    --once \\")
-        if headless == "True":
+        if not self._c3d_show_replay.isChecked():
             convert_lines.append("    --headless")
-        else:
-            convert_lines.append("    --no-headless")
 
         lines = [
             f'echo "=== C3D Workflow: {task} (G1-{stem}) ==="',
@@ -2306,6 +2324,15 @@ class WorkflowLauncher(QMainWindow):
         fr_lay.addWidget(self._omomo_fr_end)
         fr_lay.addStretch()
         lay.addWidget(fr_grp)
+
+        # MuJoCo replay viewer option
+        self._omomo_show_replay = QCheckBox("Show MuJoCo replay viewer after convert step")
+        self._omomo_show_replay.setChecked(False)
+        self._omomo_show_replay.setToolTip(
+            "When checked, the MuJoCo viewer opens after conversion so you can watch the robot replay.\n"
+            "Leave unchecked on headless servers (no display)."
+        )
+        lay.addWidget(self._omomo_show_replay)
 
         # Training config
         grp_omomo, self._omomo_training_widgets = self._make_training_group()
@@ -2452,10 +2479,8 @@ class WorkflowLauncher(QMainWindow):
         if convert_range_arg:
             convert_lines.append(convert_range_arg)
         convert_lines.append("    --once \\")
-        if headless == "True":
+        if not self._omomo_show_replay.isChecked():
             convert_lines.append("    --headless")
-        else:
-            convert_lines.append("    --no-headless")
 
         lines = [
             f'echo "=== OMOMO Workflow: {task} (G1-{stem}) ==="',

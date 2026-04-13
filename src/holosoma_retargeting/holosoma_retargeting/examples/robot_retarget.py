@@ -624,7 +624,14 @@ def main(cfg: RetargetingConfig) -> None:
         cfg.robot_config = RobotConfig(robot_type=robot)
 
     if cfg.motion_data_config.robot_type != robot or cfg.motion_data_config.data_format != data_format:
-        cfg.motion_data_config = MotionDataConfig(data_format=data_format, robot_type=robot)
+        cfg.motion_data_config = MotionDataConfig(
+            data_format=data_format,
+            robot_type=robot,
+            robot_dof=cfg.robot_config.ROBOT_DOF,
+        )
+    elif cfg.motion_data_config.robot_dof != cfg.robot_config.ROBOT_DOF:
+        from dataclasses import replace as _replace
+        cfg.motion_data_config = _replace(cfg.motion_data_config, robot_dof=cfg.robot_config.ROBOT_DOF)
 
     # Task-specific object setup: set default object_dir for climbing if not provided
     if task_type == "climbing" and cfg.task_config.object_dir is None:

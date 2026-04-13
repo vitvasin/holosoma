@@ -216,6 +216,24 @@ JOINTS_MAPPINGS = {
         "LeftHand": "left_rubber_hand_link",
         "RightHand": "right_rubber_hand_link",
     },
+    # 23DOF has no ankle intermediate/sphere links or separate rubber_hand_link
+    ("lafan", "g1_23dof"): {
+        "Spine1":       "torso_link",
+        "LeftUpLeg":    "left_hip_pitch_link",
+        "RightUpLeg":   "right_hip_pitch_link",
+        "LeftLeg":      "left_knee_link",
+        "RightLeg":     "right_knee_link",
+        "LeftArm":      "left_shoulder_roll_link",
+        "RightArm":     "right_shoulder_roll_link",
+        "LeftForeArm":  "left_elbow_link",
+        "RightForeArm": "right_elbow_link",
+        "LeftFoot":     "left_ankle_roll_link",
+        "RightFoot":    "right_ankle_roll_link",
+        "LeftToeBase":  "left_ankle_roll_link",
+        "RightToeBase": "right_ankle_roll_link",
+        "LeftHand":     "left_wrist_roll_rubber_hand",
+        "RightHand":    "right_wrist_roll_rubber_hand",
+    },
     ("lafan", "t1"): {
         "Spine1": "Trunk",
         "LeftUpLeg": "Hip_Pitch_Left",
@@ -250,6 +268,23 @@ JOINTS_MAPPINGS = {
         "L_Wrist": "left_rubber_hand_link",
         "R_Wrist": "right_rubber_hand_link",
     },
+    ("smplh", "g1_23dof"): {
+        "Pelvis":    "torso_link",
+        "L_Hip":     "left_hip_pitch_link",
+        "R_Hip":     "right_hip_pitch_link",
+        "L_Knee":    "left_knee_link",
+        "R_Knee":    "right_knee_link",
+        "L_Shoulder": "left_shoulder_roll_link",
+        "R_Shoulder": "right_shoulder_roll_link",
+        "L_Elbow":   "left_elbow_link",
+        "R_Elbow":   "right_elbow_link",
+        "L_Ankle":   "left_ankle_roll_link",
+        "R_Ankle":   "right_ankle_roll_link",
+        "L_Toe":     "left_ankle_roll_link",
+        "R_Toe":     "right_ankle_roll_link",
+        "L_Wrist":   "left_wrist_roll_rubber_hand",
+        "R_Wrist":   "right_wrist_roll_rubber_hand",
+    },
     ("smplh", "t1"): {
         "Pelvis": "Trunk",
         "L_Hip": "Hip_Pitch_Left",
@@ -283,6 +318,23 @@ JOINTS_MAPPINGS = {
         "R_Foot": "right_ankle_roll_sphere_5_link",
         "L_Wrist": "left_rubber_hand_link",
         "R_Wrist": "right_rubber_hand_link",
+    },
+    ("smplx", "g1_23dof"): {
+        "Pelvis":    "torso_link",
+        "L_Hip":     "left_hip_pitch_link",
+        "R_Hip":     "right_hip_pitch_link",
+        "L_Knee":    "left_knee_link",
+        "R_Knee":    "right_knee_link",
+        "L_Shoulder": "left_shoulder_roll_link",
+        "R_Shoulder": "right_shoulder_roll_link",
+        "L_Elbow":   "left_elbow_link",
+        "R_Elbow":   "right_elbow_link",
+        "L_Ankle":   "left_ankle_roll_link",
+        "R_Ankle":   "right_ankle_roll_link",
+        "L_Foot":    "left_ankle_roll_link",
+        "R_Foot":    "right_ankle_roll_link",
+        "L_Wrist":   "left_wrist_roll_rubber_hand",
+        "R_Wrist":   "right_wrist_roll_rubber_hand",
     },
     ("mocap", "g1"): {
         "Spine1": "pelvis_contour_link",
@@ -424,6 +476,9 @@ class MotionDataConfig:
     demo_joints: list[str] | None = None
     joints_mapping: dict[str, str] | None = None
 
+    # When set, resolved_joints_mapping tries ("format", "robot_NNdof") before ("format", "robot")
+    robot_dof: int | None = None
+
     @property
     def resolved_demo_joints(self) -> list[str]:
         """Get demo joints - use override if provided, else use data_format default."""
@@ -440,9 +495,18 @@ class MotionDataConfig:
 
     @property
     def resolved_joints_mapping(self) -> dict[str, str]:
-        """Get joints mapping - use override if provided, else lookup by (data_format, robot_type)."""
+        """Get joints mapping - use override if provided, else lookup by (data_format, robot_type).
+
+        If robot_dof is set, a DOF-specific key ``(data_format, "{robot_type}_{robot_dof}dof")``
+        is tried first so that 23DOF and 29DOF can have separate body-name mappings.
+        """
         if self.joints_mapping is not None:
             return self.joints_mapping
+
+        if self.robot_dof is not None:
+            dof_key = (self.data_format, f"{self.robot_type}_{self.robot_dof}dof")
+            if dof_key in JOINTS_MAPPINGS:
+                return JOINTS_MAPPINGS[dof_key]
 
         key = (self.data_format, self.robot_type)
         if key in JOINTS_MAPPINGS:
