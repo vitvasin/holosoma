@@ -47,6 +47,7 @@ if (
 # --- Early dependency check ---
 try:
     import numpy as _np
+
     _np_ver = tuple(int(x) for x in _np.__version__.split(".")[:2])
     if _np_ver < (1, 23):
         print(
@@ -76,6 +77,7 @@ mpl.use("QtAgg")
 # This MUST happen before importing matplotlib.figure / matplotlib.backends,
 # because those internally try to import Axes3D and register the '3d' projection.
 import mpl_toolkits as _mpl_toolkits_pkg
+
 _mpl_toolkits_pkg.__path__ = [str(Path(mpl.__file__).parent.parent / "mpl_toolkits")]
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -115,6 +117,7 @@ from PySide6.QtWidgets import (
 # Optional: tbparse for reading TensorBoard events
 try:
     from tbparse import SummaryReader
+
     HAS_TBPARSE = True
 except ImportError:
     HAS_TBPARSE = False
@@ -213,17 +216,17 @@ PLOT_COLORS = ["#89b4fa", "#a6e3a1", "#f9e2af", "#f38ba8"]
 #
 # Sim overhead: ~2 GB fixed + 0.00084 GB/env
 #   at 4096 envs: 2.0 + 3.44 = 5.44 GB  ✓
-VRAM_BASE_HEADLESS = 2.0    # GB fixed (IsaacSim process + neural net models)
-VRAM_BASE_GUI      = 3.5    # GB (adds viewport/render overhead)
-VRAM_PER_ENV_SIM   = 0.00084  # GB per env for physics/sim tensors
-VRAM_ALGO_PPO      = 0.5    # GB extra for PPO rollout buffers
+VRAM_BASE_HEADLESS = 2.0  # GB fixed (IsaacSim process + neural net models)
+VRAM_BASE_GUI = 3.5  # GB (adds viewport/render overhead)
+VRAM_PER_ENV_SIM = 0.00084  # GB per env for physics/sim tensors
+VRAM_ALGO_PPO = 0.5  # GB extra for PPO rollout buffers
 # SAC replay buffer: 2*(actor_obs_dim+critic_obs_dim)*buf_size*4B per env, dims scale with history
 # base obs_dim (history=1): actor~124, critic~64; buf_size=1024 (default)
 # = 2*(124+64)*1024*4 / 1024^3 = 0.00143 GB per env at history=1; linear with history
 VRAM_SAC_BUF_PER_ENV_PER_HIST = 0.00143  # GB per env per history step
 
-RAM_BASE           = 4.5    # GB (System + Base Isaac)
-RAM_PER_ENV        = 0.0006  # GB per env
+RAM_BASE = 4.5  # GB (System + Base Isaac)
+RAM_PER_ENV = 0.0006  # GB per env
 
 # ---------------------------------------------------------------------------
 # Style
@@ -450,13 +453,27 @@ class TrainingPlotWidget(QWidget):
                 spine.set_color("#45475a")
             ax.tick_params(colors="#9399b2", labelsize=7)
             if not HAS_TBPARSE:
-                ax.text(0.5, 0.5, "tbparse not installed\npip install tbparse",
-                        ha="center", va="center", color="#f38ba8", fontsize=8,
-                        transform=ax.transAxes)
+                ax.text(
+                    0.5,
+                    0.5,
+                    "tbparse not installed\npip install tbparse",
+                    ha="center",
+                    va="center",
+                    color="#f38ba8",
+                    fontsize=8,
+                    transform=ax.transAxes,
+                )
             else:
-                ax.text(0.5, 0.5, "Waiting for data...",
-                        ha="center", va="center", color="#585b70", fontsize=9,
-                        transform=ax.transAxes)
+                ax.text(
+                    0.5,
+                    0.5,
+                    "Waiting for data...",
+                    ha="center",
+                    va="center",
+                    color="#585b70",
+                    fontsize=9,
+                    transform=ax.transAxes,
+                )
         self._canvas.draw_idle()
 
     def set_target_iters(self, n: int) -> None:
@@ -565,11 +582,18 @@ class TrainingPlotWidget(QWidget):
                 steps = subset["step"].values
                 values = subset["value"].values
                 if len(steps) > 0:
-                    ax.plot(steps, values, color=PLOT_COLORS[i], linewidth=1.2,
-                            marker="o", markersize=1.5, alpha=0.85)
+                    ax.plot(steps, values, color=PLOT_COLORS[i], linewidth=1.2, marker="o", markersize=1.5, alpha=0.85)
             else:
-                ax.text(0.5, 0.5, "No data yet", ha="center", va="center",
-                        color="#585b70", fontsize=9, transform=ax.transAxes)
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No data yet",
+                    ha="center",
+                    va="center",
+                    color="#585b70",
+                    fontsize=9,
+                    transform=ax.transAxes,
+                )
 
         # Collect per-metric stats for the scoreboard
         metric_stats: dict[str, dict] = {}
@@ -616,7 +640,7 @@ class TrainingPlotWidget(QWidget):
                     if eta_sec < 60:
                         eta_str = f"  |  ETA: {eta_sec:.0f}s"
                     elif eta_sec < 3600:
-                        eta_str = f"  |  ETA: {eta_sec/60:.0f}m"
+                        eta_str = f"  |  ETA: {eta_sec / 60:.0f}m"
                     else:
                         h = int(eta_sec // 3600)
                         m = int((eta_sec % 3600) // 60)
@@ -629,8 +653,11 @@ class TrainingPlotWidget(QWidget):
         # Push stats to scoreboard if attached
         if hasattr(self, "_scoreboard") and self._scoreboard is not None:
             self._scoreboard.update_stats(
-                metric_stats, current_step, self._target_iters,
-                steps_per_sec, eta_sec,
+                metric_stats,
+                current_step,
+                self._target_iters,
+                steps_per_sec,
+                eta_sec,
             )
 
     def set_log_dir(self, path: Path):
@@ -647,9 +674,7 @@ class TrainingPlotWidget(QWidget):
 class TrainingScoreboard(QWidget):
     """Live scoreboard showing key training stats from TensorBoard logs."""
 
-    _ROW_STYLE = (
-        "background:#313244; border-radius:4px; padding:6px 8px; margin:1px 0;"
-    )
+    _ROW_STYLE = "background:#313244; border-radius:4px; padding:6px 8px; margin:1px 0;"
     _VALUE_STYLE = "font-size:16px; font-weight:bold; font-family:'JetBrains Mono',monospace;"
     _LABEL_STYLE = "font-size:10px; color:#9399b2;"
     _SUBLABEL_STYLE = "font-size:9px; color:#6c7086;"
@@ -715,23 +740,22 @@ class TrainingScoreboard(QWidget):
             cl.addLayout(sub_row)
 
             lay.addWidget(card)
-            self._cards.append({
-                "latest": latest_lbl,
-                "best": best_lbl,
-                "step": step_lbl,
-            })
+            self._cards.append(
+                {
+                    "latest": latest_lbl,
+                    "best": best_lbl,
+                    "step": step_lbl,
+                }
+            )
 
         lay.addStretch()
 
-    def update_stats(self, stats: dict[str, dict], current_step: int,
-                     target_iters: int, speed: float, eta_sec: float):
+    def update_stats(self, stats: dict[str, dict], current_step: int, target_iters: int, speed: float, eta_sec: float):
         # Progress
         if target_iters > 0:
             pct = min(100, int(100 * current_step / target_iters))
             self._progress_bar.setValue(pct)
-            self._progress_lbl.setText(
-                f"Iteration: {current_step:,} / {target_iters:,}  ({pct}%)"
-            )
+            self._progress_lbl.setText(f"Iteration: {current_step:,} / {target_iters:,}  ({pct}%)")
         else:
             self._progress_bar.setValue(0)
             self._progress_lbl.setText(f"Iteration: {current_step:,}")
@@ -793,14 +817,28 @@ class TrainingScoreboard(QWidget):
 # ---------------------------------------------------------------------------
 _LAFAN_PARENTS = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19, 20, 21]
 _LAFAN_NAMES = [
-    "root", "lhip", "rhip", "belly",
-    "lknee", "rknee", "spine",
-    "lankle", "rankle", "chest",
-    "ltoes", "rtoes", "neck",
-    "linshoulder", "rinshoulder", "head",
-    "lshoulder", "rshoulder",
-    "lelbow", "relbow",
-    "lwrist", "rwrist",
+    "root",
+    "lhip",
+    "rhip",
+    "belly",
+    "lknee",
+    "rknee",
+    "spine",
+    "lankle",
+    "rankle",
+    "chest",
+    "ltoes",
+    "rtoes",
+    "neck",
+    "linshoulder",
+    "rinshoulder",
+    "head",
+    "lshoulder",
+    "rshoulder",
+    "lelbow",
+    "relbow",
+    "lwrist",
+    "rwrist",
 ]
 
 
@@ -841,10 +879,10 @@ class MotionPreviewDialog(QWidget):
         # 3D matplotlib canvas
         self._fig = Figure(figsize=(5, 4), facecolor="#1e1e2e")
         self._ax: Axes3D = self._fig.add_subplot(111, projection="3d")
-        
+
         # Set good initial view angle: 20 deg elevation, 45 deg azimuth
         self._ax.view_init(elev=20, azim=45)
-        
+
         self._canvas = FigureCanvasQTAgg(self._fig)
         splitter.addWidget(self._canvas)
 
@@ -854,9 +892,7 @@ class MotionPreviewDialog(QWidget):
         self._meta_text = QTextEdit()
         self._meta_text.setReadOnly(True)
         self._meta_text.setMaximumWidth(200)
-        self._meta_text.setStyleSheet(
-            "background:#313244; color:#cdd6f4; font-size:11px; border:none;"
-        )
+        self._meta_text.setStyleSheet("background:#313244; color:#cdd6f4; font-size:11px; border:none;")
         meta_lay.addWidget(self._meta_text)
         splitter.addWidget(meta_box)
         splitter.setSizes([560, 200])
@@ -902,9 +938,7 @@ class MotionPreviewDialog(QWidget):
             return
 
         if data.ndim != 3 or data.shape[2] != 3:
-            self._info_lbl.setText(
-                f"Unexpected shape {data.shape}. Expected (T, J, 3)."
-            )
+            self._info_lbl.setText(f"Unexpected shape {data.shape}. Expected (T, J, 3).")
             return
 
         self._data = data
@@ -921,37 +955,35 @@ class MotionPreviewDialog(QWidget):
             f"Joints (J): {J}\n"
             f"Shape: ({T}, {J}, 3)\n\n"
             f"Skeleton: {'LAFAN1 (22J)' if known else f'Unknown ({J}J)'}\n\n"
-            f"X range: [{data[:,:,0].min():.2f}, {data[:,:,0].max():.2f}]\n"
-            f"Y range: [{data[:,:,1].min():.2f}, {data[:,:,1].max():.2f}]\n"
-            f"Z range: [{data[:,:,2].min():.2f}, {data[:,:,2].max():.2f}]\n"
+            f"X range: [{data[:, :, 0].min():.2f}, {data[:, :, 0].max():.2f}]\n"
+            f"Y range: [{data[:, :, 1].min():.2f}, {data[:, :, 1].max():.2f}]\n"
+            f"Z range: [{data[:, :, 2].min():.2f}, {data[:, :, 2].max():.2f}]\n"
         )
         self._meta_text.setPlainText(meta)
-        self._info_lbl.setText(
-            f"{self._path.name}  |  {T} frames  |  {J} joints  |  {size_mb:.1f} MB"
-        )
+        self._info_lbl.setText(f"{self._path.name}  |  {T} frames  |  {J} joints  |  {size_mb:.1f} MB")
 
         self._draw_frame(0)
 
     def _draw_frame(self, frame_idx: int):
         if self._data is None:
             return
-    
+
         # LAFAN1 data is typically Y-UP. Matplotlib 3D is Z-UP by default.
         # We map Data(X, Y, Z) -> Plot(X, Z, Y) so the character stands upright.
         data = self._data
         J = data.shape[1]
         raw_pts = data[frame_idx]  # (J, 3) -> [x, y, z] (y is up)
-        
+
         # Coordinate mapping for upright visualization
         pts = np.zeros_like(raw_pts)
         pts[:, 0] = raw_pts[:, 0]  # Side (X)
         pts[:, 1] = raw_pts[:, 2]  # Depth (Z)
         pts[:, 2] = raw_pts[:, 1]  # Height (Y)
-    
+
         ax = self._ax
         # Save current view orientation to prevent resets during play
         elev, azim = ax.elev, ax.azim
-        
+
         ax.clear()
         ax.set_facecolor("#1e1e2e")
         ax.set_xlabel("Side (X)", color="#9399b2", fontsize=7)
@@ -963,10 +995,10 @@ class MotionPreviewDialog(QWidget):
         ax.zaxis.pane.fill = False
         for pane in (ax.xaxis.pane, ax.yaxis.pane, ax.zaxis.pane):
             pane.set_edgecolor("#45475a")
-        
+
         # Restore view orientation
         ax.view_init(elev=elev, azim=azim)
-    
+
         # Draw a simple ground grid around the character's projection
         root_pos = pts[0]
         grid_size = 2.0
@@ -977,20 +1009,18 @@ class MotionPreviewDialog(QWidget):
             ax.plot([x, x], [y_grid[0], y_grid[-1]], [0, 0], color="#313244", linewidth=0.5, alpha=0.5)
         for y in y_grid:
             ax.plot([x_grid[0], x_grid[-1]], [y, y], [0, 0], color="#313244", linewidth=0.5, alpha=0.5)
-    
+
         # Scatter joints
-        ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2],
-                   c="#89b4fa", s=25, depthshade=False, zorder=5)
-    
+        ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], c="#89b4fa", s=25, depthshade=False, zorder=5)
+
         # Draw bones if skeleton matches
         if J == len(_LAFAN_PARENTS):
             for j, parent in enumerate(_LAFAN_PARENTS):
                 if parent < 0:
                     continue
                 p0, p1 = pts[parent], pts[j]
-                ax.plot([p0[0], p1[0]], [p0[1], p1[1]], [p0[2], p1[2]],
-                        color="#a6e3a1", linewidth=2.0, alpha=0.9)
-    
+                ax.plot([p0[0], p1[0]], [p0[1], p1[1]], [p0[2], p1[2]], color="#a6e3a1", linewidth=2.0, alpha=0.9)
+
         # Camera following: Center on the root joint (pts[0])
         # Use a fixed span (1.2m radius) for consistent scaling across sequences
         span = 1.2
@@ -998,7 +1028,7 @@ class MotionPreviewDialog(QWidget):
         ax.set_ylim(root_pos[1] - span, root_pos[1] + span)
         # For Z (height), we show from ground to slightly above head
         ax.set_zlim(-0.1, 2 * span - 0.1)
-    
+
         self._canvas.draw_idle()
 
     def _on_slider(self, value: int):
@@ -1037,12 +1067,28 @@ class MotionPreviewDialog(QWidget):
 # ---------------------------------------------------------------------------
 class _TrainingWidgets:
     """Holds references to all training-config widgets for a tab."""
+
     __slots__ = (
-        "alpha_init", "envs", "ep_len", "foot_tolerance", "group",
-        "headless", "history_length", "iters", "logger",
-        "video_enabled", "video_interval",
-        "vram_bar", "vram_lbl", "ram_bar", "ram_lbl", "health_msg",
-        "robot_cb", "algo_cb", "run_btn", "preset_combo"
+        "alpha_init",
+        "envs",
+        "ep_len",
+        "foot_tolerance",
+        "group",
+        "headless",
+        "history_length",
+        "iters",
+        "logger",
+        "video_enabled",
+        "video_interval",
+        "vram_bar",
+        "vram_lbl",
+        "ram_bar",
+        "ram_lbl",
+        "health_msg",
+        "robot_cb",
+        "algo_cb",
+        "run_btn",
+        "preset_combo",
     )
 
 
@@ -1157,7 +1203,9 @@ class WorkflowLauncher(QMainWindow):
 
         # ── GPU Status Monitoring ──────────────────────────────────────
         self._gpu_lbl = QLabel("GPU VRAM: -- / -- MB")
-        self._gpu_lbl.setStyleSheet("color: #f9e2af; font-family: 'JetBrains Mono', monospace; font-weight: bold; padding-right: 10px;")
+        self._gpu_lbl.setStyleSheet(
+            "color: #f9e2af; font-family: 'JetBrains Mono', monospace; font-weight: bold; padding-right: 10px;"
+        )
         self.statusBar().addPermanentWidget(self._gpu_lbl)
 
         self._gpu_timer = QTimer(self)
@@ -1215,27 +1263,33 @@ class WorkflowLauncher(QMainWindow):
             # query-gpu returns e.g. "8502, 23028"
             cmd = ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"]
             output = subprocess.check_output(cmd, encoding="utf-8", stderr=subprocess.DEVNULL).strip()
-            
+
             # If multiple GPUs, this might return multiple lines; take the first one for now
             line = output.splitlines()[0]
             used, total = map(float, line.split(","))
             self._gpu_used_mb = used
             self._gpu_total_mb = total
             pct = (used / total) * 100
-            
+
             # Color code based on usage
-            color = "#f9e2af" # Yellow (Warning-ish)
-            if pct < 50: color = "#a6e3a1" # Green
-            elif pct > 90: color = "#f38ba8" # Red
-            
-            self._gpu_lbl.setStyleSheet(f"color: {color}; font-family: 'JetBrains Mono', monospace; font-weight: bold; padding-right: 10px;")
-            self._gpu_lbl.setText(f"GPU VRAM: {used/1024:.1f} / {total/1024:.1f} GB ({pct:.1f}%)")
-            
+            color = "#f9e2af"  # Yellow (Warning-ish)
+            if pct < 50:
+                color = "#a6e3a1"  # Green
+            elif pct > 90:
+                color = "#f38ba8"  # Red
+
+            self._gpu_lbl.setStyleSheet(
+                f"color: {color}; font-family: 'JetBrains Mono', monospace; font-weight: bold; padding-right: 10px;"
+            )
+            self._gpu_lbl.setText(f"GPU VRAM: {used / 1024:.1f} / {total / 1024:.1f} GB ({pct:.1f}%)")
+
             # Also trigger resource health update for active tab
             self._update_all_resource_health()
         except Exception:
             self._gpu_lbl.setText("GPU VRAM: N/A")
-            self._gpu_lbl.setStyleSheet("color: #6c7086; font-family: 'JetBrains Mono', monospace; font-weight: bold; padding-right: 10px;")
+            self._gpu_lbl.setStyleSheet(
+                "color: #6c7086; font-family: 'JetBrains Mono', monospace; font-weight: bold; padding-right: 10px;"
+            )
             self._gpu_used_mb = 0
             self._gpu_total_mb = 0
             self._update_all_resource_health()
@@ -1254,16 +1308,16 @@ class WorkflowLauncher(QMainWindow):
 
     def _preset_to_dict(self, tw: _TrainingWidgets) -> dict:
         return {
-            "envs":           tw.envs.value(),
-            "iters":          tw.iters.value(),
-            "ep_len":         tw.ep_len.value(),
+            "envs": tw.envs.value(),
+            "iters": tw.iters.value(),
+            "ep_len": tw.ep_len.value(),
             "history_length": tw.history_length.value(),
-            "alpha_init":     tw.alpha_init.value(),
+            "alpha_init": tw.alpha_init.value(),
             "foot_tolerance": tw.foot_tolerance.value(),
-            "headless":       tw.headless.isChecked(),
-            "video_enabled":  tw.video_enabled.isChecked(),
+            "headless": tw.headless.isChecked(),
+            "video_enabled": tw.video_enabled.isChecked(),
             "video_interval": tw.video_interval.value(),
-            "logger":         tw.logger.currentData(),
+            "logger": tw.logger.currentData(),
         }
 
     def _dict_to_tw(self, d: dict, tw: _TrainingWidgets) -> None:
@@ -1313,16 +1367,16 @@ class WorkflowLauncher(QMainWindow):
 
     def _save_preset(self, tw: _TrainingWidgets) -> None:
         name, ok = QInputDialog.getText(
-            self, "Save Preset", "Preset name:",
+            self,
+            "Save Preset",
+            "Preset name:",
             text=tw.preset_combo.currentText() or "my_preset",
         )
         if not ok or not name.strip():
             return
         name = name.strip().replace(" ", "_")
         PRESETS_DIR.mkdir(parents=True, exist_ok=True)
-        self._preset_path(name).write_text(
-            json.dumps(self._preset_to_dict(tw), indent=2)
-        )
+        self._preset_path(name).write_text(json.dumps(self._preset_to_dict(tw), indent=2))
         self._refresh_all_preset_combos()
         # Select the just-saved preset
         for tw2 in [
@@ -1361,7 +1415,8 @@ class WorkflowLauncher(QMainWindow):
         if not path.exists():
             return
         reply = QMessageBox.question(
-            self, "Delete preset",
+            self,
+            "Delete preset",
             f"Delete preset '{name}'?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -1410,7 +1465,7 @@ class WorkflowLauncher(QMainWindow):
 
         # 3. Get Actual System Info
         total_vram_gb = self._gpu_total_mb / 1024.0
-        
+
         mem = psutil.virtual_memory()
         total_ram_gb = mem.total / (1024**3)
 
@@ -1418,7 +1473,7 @@ class WorkflowLauncher(QMainWindow):
         vram_ratio = 0
         if total_vram_gb > 0:
             vram_ratio = (est_vram_gb / total_vram_gb) * 100
-        
+
         ram_ratio = (est_ram_gb / total_ram_gb) * 100
 
         # 5. Update UI Bars
@@ -1429,34 +1484,38 @@ class WorkflowLauncher(QMainWindow):
 
         # 6. Status Logic & Pulsing
         status = "Optimal configuration."
-        color = "#a6e3a1" # Green
+        color = "#a6e3a1"  # Green
         can_run = True
-        
+
         # Check VRAM primary
         if vram_ratio > 90 or (est_vram_gb > (total_vram_gb * 0.95) and total_vram_gb > 0):
             status = "⚠ CRITICAL: Likely to OOM. Reduce Env Count!"
-            color = "#f38ba8" if not self._pulse_state else "#1e1e2e" # Pulsing Red
+            color = "#f38ba8" if not self._pulse_state else "#1e1e2e"  # Pulsing Red
             can_run = False
         elif vram_ratio > 75:
             status = "⚠ Warning: High VRAM usage. Close other apps."
-            color = "#f9e2af" # Yellow
+            color = "#f9e2af"  # Yellow
         elif ram_ratio > 90 or est_ram_gb > (total_ram_gb * 0.95):
             status = "⚠ CRITICAL: Insufficient System RAM!"
-            color = "#f38ba8" if not self._pulse_state else "#1e1e2e" # Pulsing Red
+            color = "#f38ba8" if not self._pulse_state else "#1e1e2e"  # Pulsing Red
             can_run = False
-            
+
         tw.health_msg.setText(status)
         tw.health_msg.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 11px;")
-        
+
         # Style the progress bars based on ratio
         bar_color = "#a6e3a1"
-        if vram_ratio > 90: bar_color = "#f38ba8"
-        elif vram_ratio > 75: bar_color = "#f9e2af"
+        if vram_ratio > 90:
+            bar_color = "#f38ba8"
+        elif vram_ratio > 75:
+            bar_color = "#f9e2af"
         tw.vram_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {bar_color}; }}")
-        
+
         ram_bar_color = "#a6e3a1"
-        if ram_ratio > 90: ram_bar_color = "#f38ba8"
-        elif ram_ratio > 75: ram_bar_color = "#f9e2af"
+        if ram_ratio > 90:
+            ram_bar_color = "#f38ba8"
+        elif ram_ratio > 75:
+            ram_bar_color = "#f9e2af"
         tw.ram_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {ram_bar_color}; }}")
 
         # 7. Disable Run Button if critical
@@ -1469,8 +1528,7 @@ class WorkflowLauncher(QMainWindow):
     # ===================================================================
     #  Process runner (uses QProcess for non-blocking output)
     # ===================================================================
-    def _run_script(self, script_lines: list[str], *, cwd: str | None = None,
-                    start_plot: bool = False):
+    def _run_script(self, script_lines: list[str], *, cwd: str | None = None, start_plot: bool = False):
         """Run a bash script composed of *script_lines*."""
         if self._process is not None and self._process.state() != QProcess.ProcessState.NotRunning:
             QMessageBox.warning(self, "Busy", "A process is already running. Stop it first.")
@@ -1712,7 +1770,7 @@ class WorkflowLauncher(QMainWindow):
         # Robot / algo
         grp1, self._lf_robot, self._lf_algo = self._make_robot_algo_group()
         lay.addWidget(grp1)
-        
+
         # Motion selection
         sel_grp = QGroupBox("LAFAN Motion Sequence")
         sel_lay = QVBoxLayout(sel_grp)
@@ -1833,9 +1891,7 @@ class WorkflowLauncher(QMainWindow):
         try:
             arr = np.load(str(npy), mmap_mode="r")
             T, J, _ = arr.shape
-            self._lf_seq_info.setText(
-                f"{task}  |  {T} frames  |  {J} joints  |  {human_size(npy)}"
-            )
+            self._lf_seq_info.setText(f"{task}  |  {T} frames  |  {J} joints  |  {human_size(npy)}")
             # Auto-populate frame range end to the actual max frames by default
             self._lf_fr_end.setMaximum(T - 1)
             self._lf_fr_end.setValue(T - 1)
@@ -1887,7 +1943,13 @@ class WorkflowLauncher(QMainWindow):
         exp = f"g1-{stem}-wbt{algo}"
         retarget_dir = str(PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting")
         lafan_dir = str(DEFAULT_LAFAN_DIR)
-        retarget_out = PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting" / DEFAULT_RETARGET_DIR / "lafan" / f"{task}.npz"
+        retarget_out = (
+            PROJECT_ROOT
+            / "src/holosoma_retargeting/holosoma_retargeting"
+            / DEFAULT_RETARGET_DIR
+            / "lafan"
+            / f"{task}.npz"
+        )
         convert_out = f"{DEFAULT_CONVERT_DIR}/lafan/{task}_mj_fps50.npz"
         converted_file = f"{retarget_dir}/{DEFAULT_CONVERT_DIR}/lafan/{task}_mj_fps50.npz"
 
@@ -1895,12 +1957,13 @@ class WorkflowLauncher(QMainWindow):
         skip_retarget = False
         if retarget_out.exists():
             reply = QMessageBox.question(
-                self, "Retargeted file exists",
+                self,
+                "Retargeted file exists",
                 f"Retargeted output already exists:\n{retarget_out}\n\nOverwrite it?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
-            skip_retarget = (reply == QMessageBox.StandardButton.No)
+            skip_retarget = reply == QMessageBox.StandardButton.No
 
         # ── Frame range ───────────────────────────────────────────────
         use_range = self._lf_use_range.isChecked()
@@ -2006,9 +2069,7 @@ class WorkflowLauncher(QMainWindow):
         if history_line:
             lines.append(history_line)
         # Last arg (no trailing backslash)
-        lines.append(
-            f"    --command.setup_terms.motion_command.params.motion_config.motion_file={converted_file}"
-        )
+        lines.append(f"    --command.setup_terms.motion_command.params.motion_config.motion_file={converted_file}")
         lines += [
             "",
             'echo "=== LAFAN Workflow complete! ==="',
@@ -2030,7 +2091,7 @@ class WorkflowLauncher(QMainWindow):
 
         grp1, self._c3d_robot, self._c3d_algo = self._make_robot_algo_group()
         lay.addWidget(grp1)
-        
+
         # C3D file
         file_grp = QGroupBox("C3D Input File")
         file_lay = QVBoxLayout(file_grp)
@@ -2169,18 +2230,22 @@ class WorkflowLauncher(QMainWindow):
 
         # Overwrite check for retarget output
         retarget_out = (
-            PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting"
-            / DEFAULT_RETARGET_DIR / "c3d" / f"{task}.npz"
+            PROJECT_ROOT
+            / "src/holosoma_retargeting/holosoma_retargeting"
+            / DEFAULT_RETARGET_DIR
+            / "c3d"
+            / f"{task}.npz"
         )
         skip_retarget = False
         if retarget_out.exists():
             reply = QMessageBox.question(
-                self, "Retargeted file exists",
+                self,
+                "Retargeted file exists",
                 f"Retargeted output already exists:\n{retarget_out}\n\nOverwrite it?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
-            skip_retarget = (reply == QMessageBox.StandardButton.No)
+            skip_retarget = reply == QMessageBox.StandardButton.No
 
         # Frame range
         use_range = self._c3d_use_range.isChecked()
@@ -2297,9 +2362,7 @@ class WorkflowLauncher(QMainWindow):
         lines.extend(video_lines)
         if history_line:
             lines.append(history_line)
-        lines.append(
-            f"    --command.setup_terms.motion_command.params.motion_config.motion_file={converted_file}"
-        )
+        lines.append(f"    --command.setup_terms.motion_command.params.motion_config.motion_file={converted_file}")
         lines += [
             "",
             'echo "=== C3D Workflow complete! ==="',
@@ -2456,8 +2519,11 @@ class WorkflowLauncher(QMainWindow):
         retarget_dir = str(PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting")
         omomo_data_dir = self._omomo_data_dir.text().strip()
         retarget_out = (
-            PROJECT_ROOT / "src/holosoma_retargeting/holosoma_retargeting"
-            / DEFAULT_RETARGET_DIR / "omomo" / f"{task}.npz"
+            PROJECT_ROOT
+            / "src/holosoma_retargeting/holosoma_retargeting"
+            / DEFAULT_RETARGET_DIR
+            / "omomo"
+            / f"{task}.npz"
         )
         convert_out = f"{DEFAULT_CONVERT_DIR}/omomo/{task}_mj_fps50.npz"
         converted_file = f"{retarget_dir}/{DEFAULT_CONVERT_DIR}/omomo/{task}_mj_fps50.npz"
@@ -2466,12 +2532,13 @@ class WorkflowLauncher(QMainWindow):
         skip_retarget = False
         if retarget_out.exists():
             reply = QMessageBox.question(
-                self, "Retargeted file exists",
+                self,
+                "Retargeted file exists",
                 f"Retargeted output already exists:\n{retarget_out}\n\nOverwrite it?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
-            skip_retarget = (reply == QMessageBox.StandardButton.No)
+            skip_retarget = reply == QMessageBox.StandardButton.No
 
         # Frame range
         use_range = self._omomo_use_range.isChecked()
@@ -2573,9 +2640,7 @@ class WorkflowLauncher(QMainWindow):
         lines.extend(video_lines)
         if history_line:
             lines.append(history_line)
-        lines.append(
-            f"    --command.setup_terms.motion_command.params.motion_config.motion_file={converted_file}"
-        )
+        lines.append(f"    --command.setup_terms.motion_command.params.motion_config.motion_file={converted_file}")
         lines += [
             "",
             'echo "=== OMOMO Workflow complete! ==="',
@@ -2614,7 +2679,9 @@ class WorkflowLauncher(QMainWindow):
         self._inf_history.setRange(1, 16)
         self._inf_history.setValue(1)
         self._inf_history.setToolTip(
-            "Must match training value (--observation.groups.actor_obs.history-length).\n"
+            "Must match training value.\n"
+            "Training: --observation.groups.actor_obs.history-length\n"
+            "Inference: --observation.history-length-dict.actor-obs\n"
             "Check your training config or run log."
         )
         cfg_grid.addWidget(self._inf_history, row, 3)
@@ -2647,8 +2714,7 @@ class WorkflowLauncher(QMainWindow):
         cfg_grid.addWidget(QLabel("Network Interface:"), row, 2)
         self._inf_interface = QLineEdit("auto")
         self._inf_interface.setToolTip(
-            "DDS network interface (task.interface).\n"
-            "Use 'auto' to detect, or set explicitly e.g. 'eth0'."
+            "DDS network interface (task.interface).\nUse 'auto' to detect, or set explicitly e.g. 'eth0'."
         )
         cfg_grid.addWidget(self._inf_interface, row, 3)
 
@@ -2696,8 +2762,7 @@ class WorkflowLauncher(QMainWindow):
         mj_grid.addWidget(QLabel("Interface:"), mj_row, 0)
         self._mj_interface = QLineEdit("lo")
         self._mj_interface.setToolTip(
-            "Network interface (task.interface).\n"
-            "Use 'lo' (loopback) when sim and policy run on the same machine."
+            "Network interface (task.interface).\nUse 'lo' (loopback) when sim and policy run on the same machine."
         )
         mj_grid.addWidget(self._mj_interface, mj_row, 1)
 
@@ -2798,8 +2863,7 @@ class WorkflowLauncher(QMainWindow):
         self._hw_onnx_path.setPlaceholderText("Or enter ONNX path manually")
         hw_lay.addWidget(self._hw_onnx_path)
 
-        warn = QLabel("WARNING: This will control the physical G1 robot!\n"
-                       "Ensure E-stop is accessible.")
+        warn = QLabel("WARNING: This will control the physical G1 robot!\nEnsure E-stop is accessible.")
         warn.setStyleSheet("color: #f38ba8; font-weight: bold; padding: 6px;")
         hw_lay.addWidget(warn)
 
@@ -2862,8 +2926,11 @@ class WorkflowLauncher(QMainWindow):
     def _refresh_mj_onnx(self):
         self._mj_onnx_list.clear()
         files = scan_onnx(DEFAULT_LOGS_DIR)
-        for d in [PROJECT_ROOT / "logs", PROJECT_ROOT / "converted_res",
-                  PROJECT_ROOT / "src/holosoma_inference/holosoma_inference/models"]:
+        for d in [
+            PROJECT_ROOT / "logs",
+            PROJECT_ROOT / "converted_res",
+            PROJECT_ROOT / "src/holosoma_inference/holosoma_inference/models",
+        ]:
             if d.is_dir():
                 for f in sorted(d.rglob("*.onnx"), key=lambda p: p.stat().st_mtime, reverse=True):
                     if f not in files:
@@ -2909,10 +2976,11 @@ class WorkflowLauncher(QMainWindow):
             self._log_info(f"Opened terminal: {launched[0]}")
             return True
         QMessageBox.critical(
-            self, "No Terminal Found",
+            self,
+            "No Terminal Found",
             "Could not find a terminal emulator.\n"
             "Install one of: gnome-terminal, xterm, konsole, xfce4-terminal\n\n"
-            f"Script saved to: {tmp_path}"
+            f"Script saved to: {tmp_path}",
         )
         return False
 
@@ -2931,8 +2999,7 @@ class WorkflowLauncher(QMainWindow):
         bridge_args = ""
         if use_joystick:
             bridge_args = (
-                " \\\n    --simulator.config.bridge.enabled=True"
-                " \\\n    --simulator.config.bridge.use-joystick=True"
+                " \\\n    --simulator.config.bridge.enabled=True \\\n    --simulator.config.bridge.use-joystick=True"
             )
 
         lines = [
@@ -2965,9 +3032,9 @@ class WorkflowLauncher(QMainWindow):
         interface = self._mj_interface.text().strip() or "lo"
         use_sim_time = self._mj_use_sim_time.isChecked()
         use_joystick = self._mj_use_joystick.isChecked()
-        scale_by_effort = "True" if self._inf_scale_by_effort.isChecked() else "False"
+        # scale_by_effort = "True" if self._inf_scale_by_effort.isChecked() else "False"
 
-        joystick_flag = "--task.use-joystick" if use_joystick else "--task.no-use-joystick"
+        joystick_flag = "--task.use-joystick" if use_joystick else "--task.use-keyboard"
 
         sim_time_flag = "--task.use-sim-time \\" if use_sim_time else ""
 
@@ -2981,10 +3048,10 @@ class WorkflowLauncher(QMainWindow):
             "python3 src/holosoma_inference/holosoma_inference/run_policy.py \\",
             f"    inference:{inf_cfg} \\",
             f'    --task.model-path="{onnx_path}" \\',
-            f"    --observation.groups.actor_obs.history-length={history} \\",
+            f"    --observation.history-length-dict.actor-obs={history} \\",
             f"    --task.rl-rate={rl_rate} \\",
             f"    --task.policy-action-scale={action_scale} \\",
-            f"    --task.action-scales-by-effort-limit-over-p-gain={scale_by_effort} \\",
+            # f"    --task.action-scales-by-effort-limit-over-p-gain={scale_by_effort} \\",
         ]
         if sim_time_flag:
             lines.append(f"    {sim_time_flag}")
@@ -3038,9 +3105,9 @@ class WorkflowLauncher(QMainWindow):
             return
 
         reply = QMessageBox.warning(
-            self, "Hardware Deployment",
-            "This will control the physical G1 robot!\n"
-            "Make sure E-stop is accessible.\n\nContinue?",
+            self,
+            "Hardware Deployment",
+            "This will control the physical G1 robot!\nMake sure E-stop is accessible.\n\nContinue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -3069,7 +3136,7 @@ class WorkflowLauncher(QMainWindow):
             "python src/holosoma_inference/holosoma_inference/run_policy.py \\",
             f"    inference:{robot_cfg} \\",
             f'    --task.model-path="{onnx_path}" \\',
-            f"    --observation.groups.actor_obs.history-length={history} \\",
+            f"    --observation.history-length-dict.actor-obs={history} \\",
             f"    --task.rl-rate={rl_rate} \\",
             f"    --task.policy-action-scale={action_scale} \\",
             f"    --task.action-scales-by-effort-limit-over-p-gain={scale_by_effort} \\",
@@ -3163,13 +3230,13 @@ class WorkflowLauncher(QMainWindow):
 
         # (label, instance attr, current value, show browse button)
         dir_fields = [
-            ("LAFAN Data:",      "_settings_lafan_edit",    str(DEFAULT_LAFAN_DIR),  True),
-            ("C3D Data:",        "_settings_c3d_edit",     str(DEFAULT_C3D_DIR),    True),
-            ("OMOMO Data:",      "_settings_omomo_edit",   str(DEFAULT_OMOMO_DIR),  True),
-            ("Logs Dir:",        "_settings_logs_edit",    str(DEFAULT_LOGS_DIR),   True),
-            ("Retarget Output:", "_settings_retarget_edit",str(DEFAULT_RETARGET_DIR), False),
-            ("Convert Output:",  "_settings_convert_edit", str(DEFAULT_CONVERT_DIR), False),
-            ("Video Dir:",       "_settings_video_edit",   str(DEFAULT_VIDEO_DIR),  False),
+            ("LAFAN Data:", "_settings_lafan_edit", str(DEFAULT_LAFAN_DIR), True),
+            ("C3D Data:", "_settings_c3d_edit", str(DEFAULT_C3D_DIR), True),
+            ("OMOMO Data:", "_settings_omomo_edit", str(DEFAULT_OMOMO_DIR), True),
+            ("Logs Dir:", "_settings_logs_edit", str(DEFAULT_LOGS_DIR), True),
+            ("Retarget Output:", "_settings_retarget_edit", str(DEFAULT_RETARGET_DIR), False),
+            ("Convert Output:", "_settings_convert_edit", str(DEFAULT_CONVERT_DIR), False),
+            ("Video Dir:", "_settings_video_edit", str(DEFAULT_VIDEO_DIR), False),
         ]
         for row_idx, (label_text, attr, default, has_browse) in enumerate(dir_fields):
             lbl = QLabel(label_text)
@@ -3196,8 +3263,7 @@ class WorkflowLauncher(QMainWindow):
         btn_row = QHBoxLayout()
         save_btn = QPushButton("Save & Apply")
         save_btn.setStyleSheet(
-            "background:#a6e3a1; color:#1e1e2e; font-weight:bold;"
-            "padding:6px 16px; border-radius:4px;"
+            "background:#a6e3a1; color:#1e1e2e; font-weight:bold;padding:6px 16px; border-radius:4px;"
         )
         save_btn.clicked.connect(self._save_dir_config)
         btn_row.addWidget(save_btn)
@@ -3213,8 +3279,13 @@ class WorkflowLauncher(QMainWindow):
         check_lay = QVBoxLayout(check_grp)
         self._settings_status_labels: list[tuple[str, QLabel]] = []
         status_names = [
-            "LAFAN Data", "C3D Data", "OMOMO Data",
-            "Logs", "Retarget Output", "Convert Output", "Videos",
+            "LAFAN Data",
+            "C3D Data",
+            "OMOMO Data",
+            "Logs",
+            "Retarget Output",
+            "Convert Output",
+            "Videos",
         ]
         for name in status_names:
             lbl = QLabel()
@@ -3247,8 +3318,7 @@ class WorkflowLauncher(QMainWindow):
 
         pull_btn = QPushButton("Pull from GitHub")
         pull_btn.setStyleSheet(
-            "background:#89b4fa; color:#1e1e2e; font-weight:bold;"
-            "padding:6px 16px; border-radius:4px;"
+            "background:#89b4fa; color:#1e1e2e; font-weight:bold;padding:6px 16px; border-radius:4px;"
         )
         pull_btn.setFixedWidth(160)
         pull_btn.clicked.connect(self._pull_from_github)
@@ -3262,14 +3332,26 @@ class WorkflowLauncher(QMainWindow):
     def _refresh_git_info(self) -> None:
         """Update the git branch/commit label in the Settings tab."""
         try:
-            branch = subprocess.run(
-                ["git", "-C", str(PROJECT_ROOT), "rev-parse", "--abbrev-ref", "HEAD"],
-                capture_output=True, text=True, timeout=5, check=False,
-            ).stdout.strip() or "unknown"
-            commit = subprocess.run(
-                ["git", "-C", str(PROJECT_ROOT), "log", "--oneline", "-1"],
-                capture_output=True, text=True, timeout=5, check=False,
-            ).stdout.strip() or "no commits"
+            branch = (
+                subprocess.run(
+                    ["git", "-C", str(PROJECT_ROOT), "rev-parse", "--abbrev-ref", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                ).stdout.strip()
+                or "unknown"
+            )
+            commit = (
+                subprocess.run(
+                    ["git", "-C", str(PROJECT_ROOT), "log", "--oneline", "-1"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                ).stdout.strip()
+                or "no commits"
+            )
             self._git_info_label.setText(f"Branch: {branch}    Last commit: {commit}")
         except Exception as exc:
             self._git_info_label.setText(f"(git info unavailable: {exc})")
@@ -3281,7 +3363,10 @@ class WorkflowLauncher(QMainWindow):
         try:
             result = subprocess.run(
                 ["git", "-C", str(PROJECT_ROOT), "pull"],
-                capture_output=True, text=True, timeout=60, check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
             )
             for line in (result.stdout + result.stderr).splitlines():
                 self._log(line)
@@ -3303,13 +3388,13 @@ class WorkflowLauncher(QMainWindow):
     @Slot()
     def _save_dir_config(self):
         cfg = {
-            "lafan_dir":    self._settings_lafan_edit.text().strip(),
-            "c3d_dir":      self._settings_c3d_edit.text().strip(),
-            "omomo_dir":    self._settings_omomo_edit.text().strip(),
-            "logs_dir":     self._settings_logs_edit.text().strip(),
+            "lafan_dir": self._settings_lafan_edit.text().strip(),
+            "c3d_dir": self._settings_c3d_edit.text().strip(),
+            "omomo_dir": self._settings_omomo_edit.text().strip(),
+            "logs_dir": self._settings_logs_edit.text().strip(),
             "retarget_dir": self._settings_retarget_edit.text().strip(),
-            "convert_dir":  self._settings_convert_edit.text().strip(),
-            "video_dir":    self._settings_video_edit.text().strip(),
+            "convert_dir": self._settings_convert_edit.text().strip(),
+            "video_dir": self._settings_video_edit.text().strip(),
         }
         _apply_dir_config(cfg)
         try:
@@ -3364,7 +3449,8 @@ class WorkflowLauncher(QMainWindow):
     def closeEvent(self, event):
         if self._process and self._process.state() != QProcess.ProcessState.NotRunning:
             reply = QMessageBox.question(
-                self, "Process Running",
+                self,
+                "Process Running",
                 "A process is still running. Kill it and exit?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
@@ -3385,24 +3471,24 @@ def _apply_dark_palette(app: QApplication) -> None:
     """Apply a dark QPalette so native widgets (QMessageBox, tooltips) match the theme."""
     pal = QPalette()
     # Window / panel backgrounds
-    pal.setColor(QPalette.ColorRole.Window,          QColor("#1e1e2e"))
-    pal.setColor(QPalette.ColorRole.WindowText,      QColor("#cdd6f4"))
-    pal.setColor(QPalette.ColorRole.Base,            QColor("#313244"))
-    pal.setColor(QPalette.ColorRole.AlternateBase,   QColor("#45475a"))
-    pal.setColor(QPalette.ColorRole.ToolTipBase,     QColor("#313244"))
-    pal.setColor(QPalette.ColorRole.ToolTipText,     QColor("#cdd6f4"))
+    pal.setColor(QPalette.ColorRole.Window, QColor("#1e1e2e"))
+    pal.setColor(QPalette.ColorRole.WindowText, QColor("#cdd6f4"))
+    pal.setColor(QPalette.ColorRole.Base, QColor("#313244"))
+    pal.setColor(QPalette.ColorRole.AlternateBase, QColor("#45475a"))
+    pal.setColor(QPalette.ColorRole.ToolTipBase, QColor("#313244"))
+    pal.setColor(QPalette.ColorRole.ToolTipText, QColor("#cdd6f4"))
     # Text
-    pal.setColor(QPalette.ColorRole.Text,            QColor("#cdd6f4"))
-    pal.setColor(QPalette.ColorRole.BrightText,      QColor("#f38ba8"))
+    pal.setColor(QPalette.ColorRole.Text, QColor("#cdd6f4"))
+    pal.setColor(QPalette.ColorRole.BrightText, QColor("#f38ba8"))
     pal.setColor(QPalette.ColorRole.PlaceholderText, QColor("#6c7086"))
     # Buttons
-    pal.setColor(QPalette.ColorRole.Button,          QColor("#45475a"))
-    pal.setColor(QPalette.ColorRole.ButtonText,      QColor("#cdd6f4"))
+    pal.setColor(QPalette.ColorRole.Button, QColor("#45475a"))
+    pal.setColor(QPalette.ColorRole.ButtonText, QColor("#cdd6f4"))
     # Highlight (selection)
-    pal.setColor(QPalette.ColorRole.Highlight,       QColor("#89b4fa"))
+    pal.setColor(QPalette.ColorRole.Highlight, QColor("#89b4fa"))
     pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#1e1e2e"))
     # Disabled text
-    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text,       QColor("#6c7086"))
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#6c7086"))
     pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#6c7086"))
     app.setPalette(pal)
 

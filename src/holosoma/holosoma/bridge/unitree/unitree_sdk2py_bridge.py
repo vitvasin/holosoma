@@ -109,13 +109,15 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
             return self.torques
 
         try:
-            # Extract from Unitree's unified structure
+            # Truncate to num_motor: HG message format carries 29 motor slots
+            # regardless of the actual robot DOF (e.g. 23 for G1-23DOF).
+            n = self.num_motor
             return self._compute_pd_torques(
-                tau_ff=self.low_cmd.tau_ff,
-                kp=self.low_cmd.kp,
-                kd=self.low_cmd.kd,
-                q_target=self.low_cmd.q_target,
-                dq_target=self.low_cmd.dq_target,
+                tau_ff=self.low_cmd.tau_ff[:n],
+                kp=self.low_cmd.kp[:n],
+                kd=self.low_cmd.kd[:n],
+                q_target=self.low_cmd.q_target[:n],
+                dq_target=self.low_cmd.dq_target[:n],
             )
         except Exception as e:
             logger.error(f"Error computing torques: {e}")

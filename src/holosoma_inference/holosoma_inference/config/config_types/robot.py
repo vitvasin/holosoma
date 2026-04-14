@@ -5,7 +5,9 @@ from __future__ import annotations
 import typing
 from typing import Any
 
+import tyro
 from pydantic.dataclasses import dataclass
+from typing_extensions import Annotated
 
 
 @dataclass(frozen=True)
@@ -189,20 +191,20 @@ class RobotConfig:
     # SDK-Specific Configuration (optional)
     # =========================================================================
 
-    unitree_legged_const: dict[str, Any] | None = None
+    unitree_legged_const: Annotated[dict[str, Any] | None, tyro.conf.Suppress] = None
     """Unitree SDK-specific constants.
 
     Contains protocol-specific values like HIGHLEVEL, LOWLEVEL, etc.
     Only used when sdk_type='unitree'.
     """
 
-    weak_motor_joint_index: dict[str, int] | None = None
+    weak_motor_joint_index: Annotated[dict[str, int] | None, tyro.conf.Suppress] = None
     """Mapping of joint names to their weak motor indices.
 
     Used for robots with weak motors that need special handling.
     """
 
-    motion: dict[str, list[str]] | None = None
+    motion: Annotated[dict[str, list[str]] | None, tyro.conf.Suppress] = None
     """Motion reference configuration.
 
     Specifies body names used for motion tracking/reference.

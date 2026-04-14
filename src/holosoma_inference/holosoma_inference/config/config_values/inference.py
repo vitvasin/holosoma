@@ -94,9 +94,9 @@ _g1_23dof_wbt_robot = replace(
 g1_23dof_wbt = InferenceConfig(
     robot=_g1_23dof_wbt_robot,
 # fmt: on
-    observation=observation.wbt,
+    observation=observation.wbt_23dof,
     task=task.wbt,
-    secondary=_g1_safety_secondary,
+    secondary=None,
 )
 
 # Core defaults - no extension imports at module load time
